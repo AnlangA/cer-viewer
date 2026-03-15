@@ -176,6 +176,8 @@ jobs:
           </dict>
           </plist>
           EOF
+          # Ad-hoc sign the app to prevent "damaged" error on macOS
+          codesign --force --deep -s - cer-viewer.app
           hdiutil create -volname "${VOLUME_NAME}" -srcfolder cer-viewer.app -ov -format UDZO ${{ matrix.asset_name }}
 
       - name: Rename binary (non-macOS)

@@ -44,7 +44,10 @@ pub struct CertViewerApp {
 
 impl CertViewerApp {
     /// Create a new application with no certificates loaded.
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Configure Chinese font support
+        Self::setup_chinese_fonts(&cc.egui_ctx);
+
         Self {
             certs: Vec::new(),
             selected_tab: 0,
@@ -52,6 +55,35 @@ impl CertViewerApp {
             info_msg: None,
             theme_applied: false,
         }
+    }
+
+    /// Setup Chinese font for rendering Chinese characters.
+    fn setup_chinese_fonts(ctx: &egui::Context) {
+        let mut fonts = egui::FontDefinitions::default();
+
+        // Load the Chinese font (use from_static for compile-time included bytes)
+        fonts.font_data.insert(
+            "NotoSansSC".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/NotoSansSC-Regular.ttf"
+            ))),
+        );
+
+        // Add Chinese font to the proportional font family (used for body text)
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("NotoSansSC".to_owned());
+
+        // Add Chinese font to the monospace font family as well
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("NotoSansSC".to_owned());
+
+        ctx.set_fonts(fonts);
     }
 
     /// Load a certificate from raw bytes (auto-detects PEM/DER).

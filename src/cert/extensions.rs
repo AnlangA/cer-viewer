@@ -7,8 +7,9 @@ use super::{CertField, OID_REGISTRY};
 use x509_parser::extensions::{
     AuthorityInfoAccess, AuthorityKeyIdentifier, BasicConstraints, CRLDistributionPoint,
     DistributionPointName, ExtendedKeyUsage, InhibitAnyPolicy, IssuerAlternativeName,
-    KeyIdentifier, KeyUsage, NameConstraints, ParsedExtension, PolicyConstraints, PolicyInformation,
-    PolicyMappings, SignedCertificateTimestamp, SubjectAlternativeName, SubjectInfoAccess,
+    KeyIdentifier, KeyUsage, NameConstraints, ParsedExtension, PolicyConstraints,
+    PolicyInformation, PolicyMappings, SignedCertificateTimestamp, SubjectAlternativeName,
+    SubjectInfoAccess,
 };
 use x509_parser::prelude::*;
 
@@ -123,7 +124,11 @@ fn parse_aki(aki: &AuthorityKeyIdentifier<'_>, children: &mut Vec<CertField>) {
         ));
     }
     if let Some(issuer) = &aki.authority_cert_issuer {
-        let issuers: String = issuer.iter().map(format_general_name).collect::<Vec<_>>().join(", ");
+        let issuers: String = issuer
+            .iter()
+            .map(format_general_name)
+            .collect::<Vec<_>>()
+            .join(", ");
         children.push(CertField::leaf("Authority Cert Issuer", issuers));
     }
     if let Some(serial) = &aki.authority_cert_serial {
@@ -147,7 +152,9 @@ type EkuChecker = fn(&ExtendedKeyUsage) -> bool;
 fn parse_key_usage(ku: &KeyUsage, children: &mut Vec<CertField>) {
     const KEY_USAGE_FLAGS: &[(&str, KeyUsageChecker)] = &[
         ("Digital Signature", |k| k.digital_signature()),
-        ("Non Repudiation (Content Commitment)", |k| k.non_repudiation()),
+        ("Non Repudiation (Content Commitment)", |k| {
+            k.non_repudiation()
+        }),
         ("Key Encipherment", |k| k.key_encipherment()),
         ("Data Encipherment", |k| k.data_encipherment()),
         ("Key Agreement", |k| k.key_agreement()),
@@ -197,9 +204,11 @@ fn parse_crl_distribution_points(crldp: &[CRLDistributionPoint], children: &mut 
 
         if let Some(dn) = &dp.distribution_point {
             let desc = match dn {
-                DistributionPointName::FullName(names) => {
-                    names.iter().map(format_general_name).collect::<Vec<_>>().join(", ")
-                }
+                DistributionPointName::FullName(names) => names
+                    .iter()
+                    .map(format_general_name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 DistributionPointName::NameRelativeToCRLIssuer(rdn) => format!("{rdn:?}"),
             };
             dp_children.push(CertField::leaf("Location", desc));
@@ -207,24 +216,47 @@ fn parse_crl_distribution_points(crldp: &[CRLDistributionPoint], children: &mut 
 
         if let Some(reasons) = &dp.reasons {
             let mut reason_list = Vec::new();
-            if reasons.key_compromise() { reason_list.push("Key Compromise"); }
-            if reasons.ca_compromise() { reason_list.push("CA Compromise"); }
-            if reasons.affilation_changed() { reason_list.push("Affiliation Changed"); }
-            if reasons.superseded() { reason_list.push("Superseded"); }
-            if reasons.cessation_of_operation() { reason_list.push("Cessation of Operation"); }
-            if reasons.certificate_hold() { reason_list.push("Certificate Hold"); }
-            if reasons.privelege_withdrawn() { reason_list.push("Privilege Withdrawn"); }
-            if reasons.aa_compromise() { reason_list.push("AA Compromise"); }
+            if reasons.key_compromise() {
+                reason_list.push("Key Compromise");
+            }
+            if reasons.ca_compromise() {
+                reason_list.push("CA Compromise");
+            }
+            if reasons.affilation_changed() {
+                reason_list.push("Affiliation Changed");
+            }
+            if reasons.superseded() {
+                reason_list.push("Superseded");
+            }
+            if reasons.cessation_of_operation() {
+                reason_list.push("Cessation of Operation");
+            }
+            if reasons.certificate_hold() {
+                reason_list.push("Certificate Hold");
+            }
+            if reasons.privelege_withdrawn() {
+                reason_list.push("Privilege Withdrawn");
+            }
+            if reasons.aa_compromise() {
+                reason_list.push("AA Compromise");
+            }
             dp_children.push(CertField::leaf("Reasons", reason_list.join(", ")));
         }
 
         if let Some(issuer) = &dp.crl_issuer {
-            let issuers: String = issuer.iter().map(format_general_name).collect::<Vec<_>>().join(", ");
+            let issuers: String = issuer
+                .iter()
+                .map(format_general_name)
+                .collect::<Vec<_>>()
+                .join(", ");
             dp_children.push(CertField::leaf("CRL Issuer", issuers));
         }
 
         if !dp_children.is_empty() {
-            children.push(CertField::container(format!("Distribution Point {}", i + 1), dp_children));
+            children.push(CertField::container(
+                format!("Distribution Point {}", i + 1),
+                dp_children,
+            ));
         }
     }
 }
@@ -239,9 +271,10 @@ fn parse_aia(aia: &AuthorityInfoAccess, children: &mut Vec<CertField>) {
 
 fn parse_certificate_policies(policies: &[PolicyInformation], children: &mut Vec<CertField>) {
     for (i, pol) in policies.iter().enumerate() {
-        let mut policy_children = vec![
-            CertField::leaf("Policy Identifier", describe_oid(&pol.policy_id)),
-        ];
+        let mut policy_children = vec![CertField::leaf(
+            "Policy Identifier",
+            describe_oid(&pol.policy_id),
+        )];
 
         if let Some(qualifiers) = &pol.policy_qualifiers {
             let qualifier_fields: Vec<CertField> = qualifiers
@@ -264,7 +297,10 @@ fn parse_certificate_policies(policies: &[PolicyInformation], children: &mut Vec
             policy_children.push(CertField::container("Policy Qualifiers", qualifier_fields));
         }
 
-        children.push(CertField::container(format!("Policy {}", i + 1), policy_children));
+        children.push(CertField::container(
+            format!("Policy {}", i + 1),
+            policy_children,
+        ));
     }
 }
 
@@ -272,7 +308,10 @@ fn parse_sct_list(sct_list: &[SignedCertificateTimestamp], children: &mut Vec<Ce
     for (i, sct) in sct_list.iter().enumerate() {
         let mut sct_children = vec![
             CertField::leaf("Version", format!("v{}", sct.version.0 + 1)),
-            CertField::leaf("Log ID", super::format_hex_block(&hex::encode(sct.id.key_id))),
+            CertField::leaf(
+                "Log ID",
+                super::format_hex_block(&hex::encode(sct.id.key_id)),
+            ),
             CertField::leaf("Timestamp", format_sct_timestamp(sct.timestamp)),
         ];
 
@@ -285,7 +324,8 @@ fn parse_sct_list(sct_list: &[SignedCertificateTimestamp], children: &mut Vec<Ce
         }
 
         // Add signature algorithm and value
-        let sig_alg = describe_sct_signature_algorithm(sct.signature.hash_alg_id, sct.signature.sign_alg_id);
+        let sig_alg =
+            describe_sct_signature_algorithm(sct.signature.hash_alg_id, sct.signature.sign_alg_id);
         sct_children.push(CertField::leaf("Signature Algorithm", sig_alg));
         sct_children.push(CertField::leaf(
             "Signature Value",
@@ -336,7 +376,10 @@ fn parse_name_constraints(nc: &NameConstraints<'_>, children: &mut Vec<CertField
             .iter()
             .enumerate()
             .map(|(i, subtree)| {
-                CertField::leaf(format!("Permitted {}", i + 1), format_general_name(&subtree.base))
+                CertField::leaf(
+                    format!("Permitted {}", i + 1),
+                    format_general_name(&subtree.base),
+                )
             })
             .collect();
         children.push(CertField::container("Permitted Subtrees", permitted_fields));
@@ -347,7 +390,10 @@ fn parse_name_constraints(nc: &NameConstraints<'_>, children: &mut Vec<CertField
             .iter()
             .enumerate()
             .map(|(i, subtree)| {
-                CertField::leaf(format!("Excluded {}", i + 1), format_general_name(&subtree.base))
+                CertField::leaf(
+                    format!("Excluded {}", i + 1),
+                    format_general_name(&subtree.base),
+                )
             })
             .collect();
         children.push(CertField::container("Excluded Subtrees", excluded_fields));
@@ -372,8 +418,14 @@ fn parse_policy_mappings(pm: &PolicyMappings<'_>, children: &mut Vec<CertField>)
             CertField::container(
                 format!("Mapping {}", i + 1),
                 vec![
-                    CertField::leaf("Issuer Domain Policy", describe_oid(&mapping.issuer_domain_policy)),
-                    CertField::leaf("Subject Domain Policy", describe_oid(&mapping.subject_domain_policy)),
+                    CertField::leaf(
+                        "Issuer Domain Policy",
+                        describe_oid(&mapping.issuer_domain_policy),
+                    ),
+                    CertField::leaf(
+                        "Subject Domain Policy",
+                        describe_oid(&mapping.subject_domain_policy),
+                    ),
                 ],
             )
         })
@@ -383,15 +435,24 @@ fn parse_policy_mappings(pm: &PolicyMappings<'_>, children: &mut Vec<CertField>)
 
 fn parse_policy_constraints(pc: &PolicyConstraints, children: &mut Vec<CertField>) {
     if let Some(require_explicit) = pc.require_explicit_policy {
-        children.push(CertField::leaf("Require Explicit Policy", require_explicit.to_string()));
+        children.push(CertField::leaf(
+            "Require Explicit Policy",
+            require_explicit.to_string(),
+        ));
     }
     if let Some(inhibit_mapping) = pc.inhibit_policy_mapping {
-        children.push(CertField::leaf("Inhibit Policy Mapping", inhibit_mapping.to_string()));
+        children.push(CertField::leaf(
+            "Inhibit Policy Mapping",
+            inhibit_mapping.to_string(),
+        ));
     }
 }
 
 fn parse_inhibit_any_policy(iap: &InhibitAnyPolicy, children: &mut Vec<CertField>) {
-    children.push(CertField::leaf("Skip Certificates", iap.skip_certs.to_string()));
+    children.push(CertField::leaf(
+        "Skip Certificates",
+        iap.skip_certs.to_string(),
+    ));
 }
 
 fn parse_subject_info_access(sia: &SubjectInfoAccess<'_>, children: &mut Vec<CertField>) {
@@ -404,13 +465,27 @@ fn parse_subject_info_access(sia: &SubjectInfoAccess<'_>, children: &mut Vec<Cer
 
 fn parse_ns_cert_type(nsct: &x509_parser::extensions::NSCertType, children: &mut Vec<CertField>) {
     let mut usages: Vec<&str> = Vec::new();
-    if nsct.ssl_client() { usages.push("SSL Client"); }
-    if nsct.ssl_server() { usages.push("SSL Server"); }
-    if nsct.smime() { usages.push("S/MIME"); }
-    if nsct.object_signing() { usages.push("Object Signing"); }
-    if nsct.ssl_ca() { usages.push("SSL CA"); }
-    if nsct.smime_ca() { usages.push("S/MIME CA"); }
-    if nsct.object_signing_ca() { usages.push("Object Signing CA"); }
+    if nsct.ssl_client() {
+        usages.push("SSL Client");
+    }
+    if nsct.ssl_server() {
+        usages.push("SSL Server");
+    }
+    if nsct.smime() {
+        usages.push("S/MIME");
+    }
+    if nsct.object_signing() {
+        usages.push("Object Signing");
+    }
+    if nsct.ssl_ca() {
+        usages.push("SSL CA");
+    }
+    if nsct.smime_ca() {
+        usages.push("S/MIME CA");
+    }
+    if nsct.object_signing_ca() {
+        usages.push("Object Signing CA");
+    }
 
     children.push(CertField::leaf("Usages", usages.join(", ")));
 }
@@ -442,12 +517,17 @@ fn format_general_name(gn: &GeneralName<'_>) -> String {
                 format!("IP: {}", format_ipv6(bytes))
             } else if bytes.len() == 8 {
                 // IPv4 with netmask
-                format!("IP: {}.{}.{}.{}/{}.{}.{}.{}",
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                    bytes[4], bytes[5], bytes[6], bytes[7])
+                format!(
+                    "IP: {}.{}.{}.{}/{}.{}.{}.{}",
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]
+                )
             } else if bytes.len() == 32 {
                 // IPv6 with netmask
-                format!("IP: {}/{}", format_ipv6(&bytes[..16]), format_ipv6(&bytes[16..]))
+                format!(
+                    "IP: {}/{}",
+                    format_ipv6(&bytes[..16]),
+                    format_ipv6(&bytes[16..])
+                )
             } else {
                 format!("IP: {}", hex::encode(bytes))
             }
@@ -457,8 +537,9 @@ fn format_general_name(gn: &GeneralName<'_>) -> String {
         GeneralName::RegisteredID(oid) => format!("Registered ID: {}", describe_oid(oid)),
         GeneralName::X400Address(_) => "X400Address: (not decoded)".to_string(),
         GeneralName::EDIPartyName(_) => "EDIPartyName: (not decoded)".to_string(),
-        GeneralName::Invalid(tag, data) => format!("Invalid: tag={} data={}",
-            tag, hex::encode(data)),
+        GeneralName::Invalid(tag, data) => {
+            format!("Invalid: tag={} data={}", tag, hex::encode(data))
+        }
     }
 }
 

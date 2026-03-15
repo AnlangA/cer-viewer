@@ -134,8 +134,7 @@ pub struct ParsedCert {
 ///
 /// Supports single-certificate PEM blocks (`-----BEGIN CERTIFICATE-----`).
 pub fn parse_pem_certificate(pem_data: &[u8]) -> Result<ParsedCert> {
-    let (_, pem) =
-        parse_x509_pem(pem_data).map_err(|e| CertError::pem(format!("{e}")))?;
+    let (_, pem) = parse_x509_pem(pem_data).map_err(|e| CertError::pem(format!("{e}")))?;
     let der_data = pem.contents.to_vec();
     let (_, cert) = parse_x509_certificate(&pem.contents)
         .map_err(|e| CertError::pem(format!("X.509 parse error: {e}")))?;
@@ -144,8 +143,7 @@ pub fn parse_pem_certificate(pem_data: &[u8]) -> Result<ParsedCert> {
 
 /// Parse DER-encoded certificate data and return a [`ParsedCert`].
 pub fn parse_der_certificate(der_data: &[u8]) -> Result<ParsedCert> {
-    let (_, cert) = parse_x509_certificate(der_data)
-        .map_err(|e| CertError::der(format!("{e}")))?;
+    let (_, cert) = parse_x509_certificate(der_data).map_err(|e| CertError::der(format!("{e}")))?;
     Ok(build_cert_tree(&cert, der_data.to_vec()))
 }
 
@@ -210,7 +208,10 @@ fn build_cert_tree(cert: &X509Certificate<'_>, der_data: Vec<u8>) -> ParsedCert 
     // Extensions
     let extensions = tbs.extensions();
     if !extensions.is_empty() {
-        let ext_fields: Vec<CertField> = extensions.iter().map(extensions::build_extension_field).collect();
+        let ext_fields: Vec<CertField> = extensions
+            .iter()
+            .map(extensions::build_extension_field)
+            .collect();
         fields.push(CertField::container("Extensions", ext_fields));
     }
 

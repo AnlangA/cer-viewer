@@ -3,7 +3,7 @@
 //! This module handles parsing of X.509 certificate extensions into
 //! displayable field trees.
 
-use super::{CertField, describe_oid};
+use super::{describe_oid, CertField};
 use x509_parser::extensions::{
     AuthorityInfoAccess, AuthorityKeyIdentifier, BasicConstraints, CRLDistributionPoint,
     DistributionPointName, ExtendedKeyUsage, InhibitAnyPolicy, IssuerAlternativeName,
@@ -240,7 +240,10 @@ fn parse_crl_distribution_points(crldp: &[CRLDistributionPoint], children: &mut 
         }
 
         if let Some(issuer) = &dp.crl_issuer {
-            dp_children.push(CertField::leaf("CRL Issuer", format_general_name_list(issuer)));
+            dp_children.push(CertField::leaf(
+                "CRL Issuer",
+                format_general_name_list(issuer),
+            ));
         }
 
         if !dp_children.is_empty() {
@@ -474,7 +477,11 @@ fn parse_ns_cert_type(nsct: &x509_parser::extensions::NSCertType, children: &mut
 
 /// Format a slice of GeneralNames as a comma-separated string.
 fn format_general_name_list(names: &[GeneralName<'_>]) -> String {
-    names.iter().map(format_general_name).collect::<Vec<_>>().join(", ")
+    names
+        .iter()
+        .map(format_general_name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn format_general_name(gn: &GeneralName<'_>) -> String {
@@ -482,29 +489,26 @@ fn format_general_name(gn: &GeneralName<'_>) -> String {
         GeneralName::DNSName(s) => format!("DNS: {s}"),
         GeneralName::RFC822Name(s) => format!("Email: {s}"),
         GeneralName::URI(s) => format!("URI: {s}"),
-        GeneralName::IPAddress(bytes) => {
-            match bytes.len() {
-                IPV4_SIZE => {
-                    format!("IP: {}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
-                }
-                IPV6_SIZE => format!("IP: {}", format_ipv6(bytes)),
-                IPV4_WITH_NETMASK_SIZE => {
-                    format!(
-                        "IP: {}.{}.{}.{}/{}.{}.{}.{}",
-                        bytes[0], bytes[1], bytes[2], bytes[3],
-                        bytes[4], bytes[5], bytes[6], bytes[7]
-                    )
-                }
-                IPV6_WITH_NETMASK_SIZE => {
-                    format!(
-                        "IP: {}/{}",
-                        format_ipv6(&bytes[..IPV6_SIZE]),
-                        format_ipv6(&bytes[IPV6_SIZE..])
-                    )
-                }
-                _ => format!("IP: {}", hex::encode(bytes)),
+        GeneralName::IPAddress(bytes) => match bytes.len() {
+            IPV4_SIZE => {
+                format!("IP: {}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
             }
-        }
+            IPV6_SIZE => format!("IP: {}", format_ipv6(bytes)),
+            IPV4_WITH_NETMASK_SIZE => {
+                format!(
+                    "IP: {}.{}.{}.{}/{}.{}.{}.{}",
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]
+                )
+            }
+            IPV6_WITH_NETMASK_SIZE => {
+                format!(
+                    "IP: {}/{}",
+                    format_ipv6(&bytes[..IPV6_SIZE]),
+                    format_ipv6(&bytes[IPV6_SIZE..])
+                )
+            }
+            _ => format!("IP: {}", hex::encode(bytes)),
+        },
         GeneralName::DirectoryName(name) => format!("DN: {name}"),
         GeneralName::OtherName(oid, _) => format!("OtherName: {} [...]", describe_oid(oid)),
         GeneralName::RegisteredID(oid) => format!("Registered ID: {}", describe_oid(oid)),

@@ -152,8 +152,7 @@ impl CertViewerApp {
                     for result in &results {
                         match result {
                             Ok(parsed) => {
-                                if let Some(existing_idx) =
-                                    self.find_certificate_by_id(&parsed.id)
+                                if let Some(existing_idx) = self.find_certificate_by_id(&parsed.id)
                                 {
                                     info!(
                                         id = %parsed.id,
@@ -302,8 +301,7 @@ impl CertViewerApp {
                 }
                 Err(e) => {
                     warn!("Failed to copy to clipboard: {}", e);
-                    self.error_msgs
-                        .push(format!("Failed to copy: {}", e));
+                    self.error_msgs.push(format!("Failed to copy: {}", e));
                 }
             },
             Err(e) => {
@@ -325,14 +323,13 @@ impl CertViewerApp {
 
     /// Handle drag and drop (consumes events to prevent duplicate loading).
     fn handle_drag_drop(&mut self, ctx: &Context) {
-        let paths: Vec<std::path::PathBuf> = ctx
-            .input_mut(|i| {
-                i.raw
-                    .dropped_files
-                    .drain(..)
-                    .filter_map(|f| f.path)
-                    .collect()
-            });
+        let paths: Vec<std::path::PathBuf> = ctx.input_mut(|i| {
+            i.raw
+                .dropped_files
+                .drain(..)
+                .filter_map(|f| f.path)
+                .collect()
+        });
 
         if !paths.is_empty() {
             self.load_files(paths);
@@ -512,8 +509,7 @@ impl eframe::App for CertViewerApp {
                         .inner_margin(Margin::same(10))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new(format!("[!] {msg}"))
-                                    .color(theme::BANNER_ERROR_TEXT),
+                                RichText::new(format!("[!] {msg}")).color(theme::BANNER_ERROR_TEXT),
                             );
                         });
                     ui.add_space(8.0);

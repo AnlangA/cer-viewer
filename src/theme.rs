@@ -18,6 +18,18 @@ pub const ACCENT: Color32 = Color32::from_rgb(100, 140, 255);
 pub const ACCENT_DIM: Color32 = Color32::from_rgb(70, 100, 200);
 pub const BORDER: Color32 = Color32::from_rgb(55, 58, 75);
 
+// Status colors for certificate validity
+pub const STATUS_VALID: Color32 = Color32::from_rgb(80, 200, 120);
+pub const STATUS_NOT_YET_VALID: Color32 = Color32::from_rgb(255, 200, 80);
+pub const STATUS_EXPIRED: Color32 = Color32::from_rgb(255, 100, 100);
+
+// Banner colors
+pub const BANNER_INFO_BG: Color32 = Color32::from_rgb(30, 80, 50);
+pub const BANNER_INFO_TEXT: Color32 = Color32::from_rgb(120, 255, 180);
+pub const BANNER_INFO_VALUE: Color32 = Color32::from_rgb(200, 255, 220);
+pub const BANNER_ERROR_BG: Color32 = Color32::from_rgb(80, 30, 30);
+pub const BANNER_ERROR_TEXT: Color32 = Color32::from_rgb(255, 120, 120);
+
 // ── Font sizes ─────────────────────────────────────────────────────
 
 pub const FONT_TITLE: f32 = 18.0;
@@ -40,6 +52,26 @@ pub fn mono_font() -> FontId {
 /// Font ID for body text.
 pub fn body_font() -> FontId {
     FontId::new(FONT_BODY, FontFamily::Proportional)
+}
+
+/// Get status color based on validity status.
+pub fn validity_color(status: crate::cert::ValidityStatus) -> Color32 {
+    use crate::cert::ValidityStatus;
+    match status {
+        ValidityStatus::Valid => STATUS_VALID,
+        ValidityStatus::NotYetValid => STATUS_NOT_YET_VALID,
+        ValidityStatus::Expired => STATUS_EXPIRED,
+    }
+}
+
+/// Get status text based on validity status.
+pub fn validity_text(status: crate::cert::ValidityStatus) -> &'static str {
+    use crate::cert::ValidityStatus;
+    match status {
+        ValidityStatus::Valid => "[OK] Valid",
+        ValidityStatus::NotYetValid => "[!] Not Yet Valid",
+        ValidityStatus::Expired => "[X] Expired",
+    }
 }
 
 /// Apply the dark modern theme to the egui context.

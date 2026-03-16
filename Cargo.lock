@@ -633,6 +633,7 @@ name = "cer-viewer"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "base64",
  "chrono",
  "eframe",
  "egui",

@@ -34,6 +34,7 @@ pub struct CertField {
 
 impl CertField {
     /// Create a leaf field with a label and value.
+    #[must_use]
     pub fn leaf(label: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -43,6 +44,7 @@ impl CertField {
     }
 
     /// Create a container field that holds children.
+    #[must_use]
     pub fn container(label: impl Into<String>, children: Vec<CertField>) -> Self {
         Self {
             label: label.into(),
@@ -52,6 +54,7 @@ impl CertField {
     }
 
     /// Create a container field with both a summary value and children.
+    #[must_use]
     pub fn node(
         label: impl Into<String>,
         value: impl Into<String>,
@@ -72,14 +75,14 @@ impl CertField {
 
 // ── Validity status ─────────────────────────────────────────────────
 
-/// Certificate validity status.
+/// Certificate validity status relative to the current time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidityStatus {
-    /// Certificate is currently valid.
+    /// Certificate is currently valid (notBefore ≤ now ≤ notAfter).
     Valid,
-    /// Certificate is not yet valid.
+    /// Certificate is not yet valid (now < notBefore).
     NotYetValid,
-    /// Certificate has expired.
+    /// Certificate has expired (now > notAfter).
     Expired,
 }
 
@@ -102,30 +105,78 @@ impl ValidityStatus {
 
 // ── Parsed certificate wrapper ─────────────────────────────────────
 
+/// Unique identifier for a certificate.
+///
+/// Based on SHA-256 fingerprint of the DER-encoded certificate data.
+/// This provides a stable identifier that can be used for duplicate detection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CertId(String);
+
+impl CertId {
+    /// Create a CertId from raw DER data.
+    pub fn from_der(der: &[u8]) -> Self {
+        Self(format_digest_hex(&Sha256::digest(der)))
+    }
+}
+
+impl std::fmt::Display for CertId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// High-level parsed certificate holding the field tree.
+///
+/// This structure contains all parsed certificate data in a format suitable
+/// for UI display. The `fields` vector contains the hierarchical representation
+/// of certificate elements.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[expect(dead_code)] // Fields are kept for future features (export, search, etc.)
 pub struct ParsedCert {
+    /// Unique identifier for this certificate (SHA-256 based).
+    pub id: CertId,
     /// Display name for this certificate (typically the CN or filename).
     pub display_name: String,
-    /// Serial number (unique identifier for the certificate).
+    /// Serial number in colon-separated hex format.
     pub serial_number: String,
-    /// SHA-256 fingerprint.
+    /// SHA-256 fingerprint in colon-separated hex format.
     pub sha256_fingerprint: String,
-    /// SHA-1 fingerprint.
+    /// SHA-1 fingerprint in colon-separated hex format.
     pub sha1_fingerprint: String,
-    /// Validity status.
+    /// Current validity status of the certificate.
     pub validity_status: ValidityStatus,
-    /// Not Before timestamp string.
+    /// Not Before timestamp as a formatted string.
     pub not_before: String,
-    /// Not After timestamp string.
+    /// Not After timestamp as a formatted string.
     pub not_after: String,
-    /// Issuer DN string.
+    /// Issuer DN as a string.
     pub issuer: String,
-    /// Subject DN string.
+    /// Subject DN as a string.
     pub subject: String,
     /// Root-level fields forming the certificate tree.
     pub fields: Vec<CertField>,
+    /// Raw DER-encoded certificate bytes (for export).
+    pub raw_der: Vec<u8>,
+}
+
+impl ParsedCert {
+    /// Export this certificate as a PEM-encoded string.
+    pub fn to_pem(&self) -> String {
+        use base64::prelude::*;
+
+        let b64 = BASE64_STANDARD.encode(&self.raw_der);
+        let mut pem = String::with_capacity(b64.len() + 64);
+        pem.push_str("-----BEGIN CERTIFICATE-----\n");
+
+        // Split base64 into 64-character lines
+        for chunk in b64.as_bytes().chunks(64) {
+            pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+            pem.push('\n');
+        }
+
+        pem.push_str("-----END CERTIFICATE-----\n");
+        pem
+    }
 }
 
 // ── Parsing entry point ────────────────────────────────────────────
@@ -141,13 +192,54 @@ pub fn parse_pem_certificate(pem_data: &[u8]) -> Result<ParsedCert> {
     Ok(build_cert_tree(&cert, der_data))
 }
 
+/// Parse all PEM certificate blocks from data, returning a list of parsed certificates.
+///
+/// Supports PEM files containing multiple certificate blocks (certificate chains).
+pub fn parse_pem_certificates(pem_data: &[u8]) -> Vec<Result<ParsedCert>> {
+    let mut results = Vec::new();
+    let mut remaining = pem_data;
+
+    while let Ok((rest, pem)) = parse_x509_pem(remaining) {
+        match parse_x509_certificate(&pem.contents) {
+            Ok((_, cert)) => {
+                results.push(Ok(build_cert_tree(&cert, pem.contents.to_vec())));
+            }
+            Err(e) => {
+                results.push(Err(CertError::pem(format!("X.509 parse error: {e}"))));
+            }
+        }
+        remaining = rest;
+        if remaining.is_empty() {
+            break;
+        }
+    }
+
+    if results.is_empty() {
+        results.push(Err(CertError::pem("No valid PEM certificate blocks found")));
+    }
+
+    results
+}
+
 /// Parse DER-encoded certificate data and return a [`ParsedCert`].
 pub fn parse_der_certificate(der_data: &[u8]) -> Result<ParsedCert> {
     let (_, cert) = parse_x509_certificate(der_data).map_err(|e| CertError::der(format!("{e}")))?;
     Ok(build_cert_tree(&cert, der_data.to_vec()))
 }
 
-/// Detect format and parse.
+/// Detect format and parse. For PEM, extracts all certificate blocks.
+pub fn parse_certificates(data: &[u8]) -> Vec<Result<ParsedCert>> {
+    if data.starts_with(b"-----BEGIN") {
+        parse_pem_certificates(data)
+    } else {
+        match parse_der_certificate(data) {
+            Ok(cert) => vec![Ok(cert)],
+            Err(e) => vec![Err(e)],
+        }
+    }
+}
+
+/// Detect format and parse a single certificate (for backward compatibility).
 pub fn parse_certificate(data: &[u8]) -> Result<ParsedCert> {
     if data.starts_with(b"-----BEGIN") {
         parse_pem_certificate(data)
@@ -160,12 +252,13 @@ pub fn parse_certificate(data: &[u8]) -> Result<ParsedCert> {
 
 fn build_cert_tree(cert: &X509Certificate<'_>, der_data: Vec<u8>) -> ParsedCert {
     let tbs = &cert.tbs_certificate;
+    let id = CertId::from_der(&der_data);
     let display_name = extract_cn(&tbs.subject).unwrap_or_else(|| "Unknown".into());
-    let serial_number = format_serial(tbs.raw_serial());
+    let serial_number = format_bytes_hex(tbs.raw_serial());
 
     // Calculate fingerprints
-    let sha256_fingerprint = format_fingerprint(&Sha256::digest(&der_data));
-    let sha1_fingerprint = format_fingerprint(&Sha1::digest(&der_data));
+    let sha256_fingerprint = format_digest_hex(&Sha256::digest(&der_data));
+    let sha1_fingerprint = format_digest_hex(&Sha1::digest(&der_data));
 
     // Validity
     let not_before = format_asn1_time(&tbs.validity.not_before);
@@ -232,6 +325,7 @@ fn build_cert_tree(cert: &X509Certificate<'_>, der_data: Vec<u8>) -> ParsedCert 
     ));
 
     ParsedCert {
+        id,
         display_name,
         serial_number,
         sha256_fingerprint,
@@ -242,17 +336,36 @@ fn build_cert_tree(cert: &X509Certificate<'_>, der_data: Vec<u8>) -> ParsedCert 
         issuer,
         subject,
         fields,
+        raw_der: der_data,
     }
 }
 
-/// Format a hash digest as a colon-separated hex string.
-fn format_fingerprint<D: AsRef<[u8]>>(digest: &D) -> String {
-    digest
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02X}"))
-        .collect::<Vec<_>>()
-        .join(":")
+/// Format raw bytes as a colon-separated uppercase hex string.
+pub(crate) fn format_bytes_hex(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    // Pre-allocate: each byte becomes "XX:" (3 chars), except last which is "XX" (2 chars)
+    let mut result = String::with_capacity(bytes.len() * 3 - 1);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 {
+            result.push(':');
+        }
+        push_hex_byte(&mut result, *b);
+    }
+    result
+}
+
+/// Push a single byte as uppercase hex to a string.
+fn push_hex_byte(s: &mut String, b: u8) {
+    const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
+    s.push(HEX_CHARS[(b >> 4) as usize] as char);
+    s.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+}
+
+/// Format a hash digest (implements `AsRef<[u8]>`) as a colon-separated uppercase hex string.
+pub(crate) fn format_digest_hex<D: AsRef<[u8]>>(digest: &D) -> String {
+    format_bytes_hex(digest.as_ref())
 }
 
 // ── Helper formatters ──────────────────────────────────────────────
@@ -268,14 +381,6 @@ fn extract_cn(name: &X509Name<'_>) -> Option<String> {
     None
 }
 
-fn format_serial(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|b| format!("{b:02X}"))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
 pub(crate) fn format_hex_block(hex_str: &str) -> String {
     hex_str
         .as_bytes()
@@ -285,7 +390,7 @@ pub(crate) fn format_hex_block(hex_str: &str) -> String {
         .join(":")
 }
 
-fn describe_oid(oid: &oid_registry::Oid<'_>) -> String {
+pub(crate) fn describe_oid(oid: &oid_registry::Oid<'_>) -> String {
     if let Some(entry) = OID_REGISTRY.get(oid) {
         let name = entry.sn();
         if name.is_empty() {
@@ -523,9 +628,9 @@ mod tests {
     }
 
     #[test]
-    fn test_format_serial_formatting() {
+    fn test_format_bytes_hex_formatting() {
         let bytes = &[0x0E, 0x7F, 0xA9, 0x2B];
-        let result = format_serial(bytes);
+        let result = format_bytes_hex(bytes);
         assert_eq!(result, "0E:7F:A9:2B");
     }
 
@@ -533,5 +638,28 @@ mod tests {
     fn test_format_hex_block_formatting() {
         let result = format_hex_block("aabb");
         assert_eq!(result, "aa:bb");
+    }
+
+    #[test]
+    fn test_parsed_cert_has_raw_der() {
+        let cert = parse_pem_certificate(BAIDU_PEM).unwrap();
+        assert!(!cert.raw_der.is_empty(), "raw_der should not be empty");
+    }
+
+    #[test]
+    fn test_to_pem_output() {
+        let cert = parse_pem_certificate(BAIDU_PEM).unwrap();
+        let pem = cert.to_pem();
+        assert!(pem.starts_with("-----BEGIN CERTIFICATE-----"));
+        assert!(pem.ends_with("-----END CERTIFICATE-----\n"));
+    }
+
+    #[test]
+    fn test_base64_encode() {
+        use base64::prelude::*;
+        assert_eq!(BASE64_STANDARD.encode(b"\x00"), "AA==");
+        assert_eq!(BASE64_STANDARD.encode(b"\x00\x00"), "AAA=");
+        assert_eq!(BASE64_STANDARD.encode(b"\x00\x00\x00"), "AAAA");
+        assert_eq!(BASE64_STANDARD.encode(b"Hello"), "SGVsbG8=");
     }
 }

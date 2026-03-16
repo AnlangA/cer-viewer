@@ -1,7 +1,12 @@
 [package]
 name = "cer-viewer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["cer-viewer contributors"]
+description = "A modern X.509 certificate viewer built with egui/eframe"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-org/cer-viewer"
+rust-version = "1.80"
 
 [dependencies]
 eframe = "0.33.3"
@@ -18,5 +23,26 @@ sha1 = "0.10.6"
 sha2 = "0.10.8"
 arboard = "3.4.1"
 thiserror = "2.0"
+base64 = "0.22"
 
 [dev-dependencies]
+
+# Release profile optimizations
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# Profile for development builds with some optimizations
+[profile.dev-opt]
+inherits = "dev"
+opt-level = 1
+
+# Profile for small binary size
+[profile.release-small]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+strip = true

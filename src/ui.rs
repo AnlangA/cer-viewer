@@ -3,12 +3,13 @@
 //! Contains the [`CertViewerApp`] struct that implements [`eframe::App`],
 //! plus helpers for drawing the certificate field tree.
 
-use crate::cert::{self, CertField, ParsedCert, ValidityStatus};
+use crate::cert::{self, CertField, CertId, ParsedCert, ValidityStatus};
 use crate::theme;
 use egui::{
     CollapsingHeader, Context, CornerRadius, Frame, Id, Key, KeyboardShortcut, Margin, RichText,
     ScrollArea, Stroke, Ui, Vec2,
 };
+use std::collections::HashMap;
 use tracing::{info, warn};
 
 // ── Keyboard shortcuts ──────────────────────────────────────────────
@@ -20,9 +21,12 @@ const CLOSE_TAB_SHORTCUT: KeyboardShortcut =
 
 // ── Tab action for deferred UI updates ──────────────────────────────
 
+/// Deferred tab actions to avoid mutability issues during UI rendering.
 #[derive(Clone, Copy)]
 enum TabAction {
+    /// Switch to the tab at the given index.
     Select(usize),
+    /// Close the tab at the given index.
     Close(usize),
 }
 
@@ -30,30 +34,43 @@ enum TabAction {
 
 /// Main application state for the certificate viewer.
 pub struct CertViewerApp {
-    /// Currently loaded certificates.
+    /// Currently loaded certificates (maintains insertion order).
     certs: Vec<ParsedCert>,
+    /// Map from certificate ID to index for O(1) lookup.
+    cert_index: HashMap<CertId, usize>,
     /// Index of the selected certificate tab.
     selected_tab: usize,
-    /// Error message to display, if any.
-    error_msg: Option<String>,
+    /// Error messages to display (collected from all file operations).
+    error_msgs: Vec<String>,
     /// Info message to display, if any.
     info_msg: Option<String>,
     /// Whether the theme has been applied.
     theme_applied: bool,
+    /// Cached clipboard instance.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl CertViewerApp {
     /// Create a new application with no certificates loaded.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Configure Chinese font support
         Self::setup_chinese_fonts(&cc.egui_ctx);
+
+        let clipboard = match arboard::Clipboard::new() {
+            Ok(cb) => Some(cb),
+            Err(e) => {
+                tracing::warn!("Failed to initialize clipboard: {}", e);
+                None
+            }
+        };
 
         Self {
             certs: Vec::new(),
+            cert_index: HashMap::new(),
             selected_tab: 0,
-            error_msg: None,
+            error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
+            clipboard,
         }
     }
 
@@ -61,7 +78,6 @@ impl CertViewerApp {
     fn setup_chinese_fonts(ctx: &egui::Context) {
         let mut fonts = egui::FontDefinitions::default();
 
-        // Load the Chinese font (use from_static for compile-time included bytes)
         fonts.font_data.insert(
             "NotoSansSC".to_owned(),
             std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
@@ -69,14 +85,12 @@ impl CertViewerApp {
             ))),
         );
 
-        // Add Chinese font to the proportional font family (used for body text)
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
             .or_default()
             .push("NotoSansSC".to_owned());
 
-        // Add Chinese font to the monospace font family as well
         fonts
             .families
             .entry(egui::FontFamily::Monospace)
@@ -92,9 +106,8 @@ impl CertViewerApp {
     pub fn load_certificate_bytes(&mut self, data: &[u8]) -> bool {
         match cert::parse_certificate(data) {
             Ok(parsed) => {
-                // Check if certificate already exists
-                if let Some(existing_idx) = self.find_certificate_by_serial(&parsed.serial_number) {
-                    info!(serial = %parsed.serial_number, "Certificate already loaded, switching to tab");
+                if let Some(existing_idx) = self.find_certificate_by_id(&parsed.id) {
+                    info!(id = %parsed.id, "Certificate already loaded, switching to tab");
                     self.selected_tab = existing_idx;
                     self.show_info(format!(
                         "Certificate already loaded: {}",
@@ -104,70 +117,76 @@ impl CertViewerApp {
                 }
 
                 info!(name = %parsed.display_name, "Certificate loaded");
-                self.error_msg = None;
+                self.error_msgs.clear();
+                let idx = self.certs.len();
+                self.cert_index.insert(parsed.id.clone(), idx);
                 self.certs.push(parsed);
-                self.selected_tab = self.certs.len() - 1;
+                self.selected_tab = idx;
                 true
             }
             Err(e) => {
                 warn!(error = %e, "Failed to load certificate");
-                self.error_msg = Some(e.to_string());
+                self.error_msgs.push(e.to_string());
                 false
             }
         }
     }
 
-    /// Find a certificate by its serial number, returns the index if found.
-    fn find_certificate_by_serial(&self, serial: &str) -> Option<usize> {
-        self.certs
-            .iter()
-            .position(|cert| cert.serial_number == serial)
+    /// Find a certificate by its ID, returns the index if found.
+    fn find_certificate_by_id(&self, id: &CertId) -> Option<usize> {
+        self.cert_index.get(id).copied()
     }
 
-    /// Load certificates from multiple files.
+    /// Load certificates from multiple files, supporting PEM certificate chains.
     fn load_files(&mut self, paths: Vec<std::path::PathBuf>) {
         let mut loaded_count = 0;
         let mut skipped_count = 0;
-        let mut last_error: Option<String> = None;
+        let mut errors: Vec<String> = Vec::new();
         let mut last_loaded_idx: Option<usize> = None;
 
-        for path in paths {
-            match std::fs::read(&path) {
+        for path in &paths {
+            match std::fs::read(path) {
                 Ok(data) => {
-                    match cert::parse_certificate(&data) {
-                        Ok(parsed) => {
-                            // Check if certificate already exists
-                            if let Some(existing_idx) =
-                                self.find_certificate_by_serial(&parsed.serial_number)
-                            {
-                                info!(
-                                    serial = %parsed.serial_number,
-                                    "Certificate already loaded from {:?}, skipping",
-                                    path
-                                );
-                                last_loaded_idx = Some(existing_idx);
-                                skipped_count += 1;
-                            } else {
-                                info!(name = %parsed.display_name, "Certificate loaded from {:?}", path);
-                                self.certs.push(parsed);
-                                last_loaded_idx = Some(self.certs.len() - 1);
-                                loaded_count += 1;
+                    // Use parse_certificates to support multi-cert PEM chains
+                    let results = cert::parse_certificates(&data);
+                    for result in &results {
+                        match result {
+                            Ok(parsed) => {
+                                if let Some(existing_idx) =
+                                    self.find_certificate_by_id(&parsed.id)
+                                {
+                                    info!(
+                                        id = %parsed.id,
+                                        "Certificate already loaded from {:?}, skipping",
+                                        path
+                                    );
+                                    last_loaded_idx = Some(existing_idx);
+                                    skipped_count += 1;
+                                } else {
+                                    info!(name = %parsed.display_name, "Certificate loaded from {:?}", path);
+                                    let idx = self.certs.len();
+                                    self.cert_index.insert(parsed.id.clone(), idx);
+                                    self.certs.push(parsed.clone());
+                                    last_loaded_idx = Some(idx);
+                                    loaded_count += 1;
+                                }
                             }
-                        }
-                        Err(e) => {
-                            last_error = Some(format!(
-                                "Failed to parse {:?}: {}",
-                                path.file_name().unwrap_or_default(),
-                                e
-                            ));
+                            Err(e) => {
+                                let file_name = path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("<invalid filename>");
+                                errors.push(format!("Failed to parse {file_name}: {e}"));
+                            }
                         }
                     }
                 }
                 Err(e) => {
-                    last_error = Some(format!(
-                        "Failed to read {:?}: {e}",
-                        path.file_name().unwrap_or_default()
-                    ));
+                    let file_name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("<invalid filename>");
+                    errors.push(format!("Failed to read {file_name}: {e}"));
                 }
             }
         }
@@ -176,7 +195,7 @@ impl CertViewerApp {
         if let Some(idx) = last_loaded_idx {
             self.selected_tab = idx;
             if loaded_count > 0 {
-                self.error_msg = None;
+                self.error_msgs.clear();
             }
         }
 
@@ -195,9 +214,8 @@ impl CertViewerApp {
             self.show_info(msg);
         }
 
-        if let Some(e) = last_error {
-            self.error_msg = Some(e);
-        }
+        // Collect all errors
+        self.error_msgs = errors;
     }
 
     /// Open a file dialog and load the selected certificates (supports multiple selection).
@@ -218,8 +236,11 @@ impl CertViewerApp {
         if index < self.certs.len() {
             let name = self.certs[index].display_name.clone();
             self.certs.remove(index);
+
+            // Rebuild the index map since indices shifted
+            self.rebuild_cert_index();
+
             self.show_info(format!("Closed: {}", name));
-            // Adjust selected tab
             if self.certs.is_empty() {
                 self.selected_tab = 0;
             } else if self.selected_tab >= self.certs.len() {
@@ -234,9 +255,20 @@ impl CertViewerApp {
     fn clear_all_certificates(&mut self) {
         let count = self.certs.len();
         self.certs.clear();
+        self.cert_index.clear();
         self.selected_tab = 0;
-        self.error_msg = None;
+        self.error_msgs.clear();
         self.show_info(format!("Cleared {} certificate(s)", count));
+    }
+
+    /// Rebuild the certificate index map after modifications.
+    fn rebuild_cert_index(&mut self) {
+        self.cert_index = self
+            .certs
+            .iter()
+            .enumerate()
+            .map(|(i, cert)| (cert.id.clone(), i))
+            .collect();
     }
 
     /// Show an info message.
@@ -244,17 +276,34 @@ impl CertViewerApp {
         self.info_msg = Some(msg);
     }
 
-    /// Copy text to clipboard.
+    /// Copy text to clipboard using cached clipboard instance.
     fn copy_to_clipboard(&mut self, text: String) {
+        // Try cached instance first
+        if let Some(clipboard) = &mut self.clipboard {
+            match clipboard.set_text(&text) {
+                Ok(()) => {
+                    self.show_info("Copied to clipboard".to_string());
+                    info!("Copied to clipboard: {} chars", text.len());
+                    return;
+                }
+                Err(e) => {
+                    warn!("Failed to copy with cached clipboard: {}", e);
+                }
+            }
+        }
+
+        // Retry with fresh instance
         match arboard::Clipboard::new() {
             Ok(mut clipboard) => match clipboard.set_text(&text) {
                 Ok(()) => {
+                    self.clipboard = Some(clipboard);
                     self.show_info("Copied to clipboard".to_string());
                     info!("Copied to clipboard: {} chars", text.len());
                 }
                 Err(e) => {
                     warn!("Failed to copy to clipboard: {}", e);
-                    self.error_msg = Some(format!("Failed to copy: {}", e));
+                    self.error_msgs
+                        .push(format!("Failed to copy: {}", e));
                 }
             },
             Err(e) => {
@@ -265,29 +314,28 @@ impl CertViewerApp {
 
     /// Handle keyboard shortcuts.
     fn handle_shortcuts(&mut self, ctx: &Context) {
-        // Ctrl+O: Open files
         if ctx.input_mut(|i| i.consume_shortcut(&OPEN_FILES_SHORTCUT)) {
             self.open_file_dialog();
         }
 
-        // Ctrl+W: Close current tab
         if ctx.input_mut(|i| i.consume_shortcut(&CLOSE_TAB_SHORTCUT)) && !self.certs.is_empty() {
             self.remove_certificate(self.selected_tab);
         }
     }
 
-    /// Handle drag and drop.
+    /// Handle drag and drop (consumes events to prevent duplicate loading).
     fn handle_drag_drop(&mut self, ctx: &Context) {
-        // Check for dropped files
-        let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+        let paths: Vec<std::path::PathBuf> = ctx
+            .input_mut(|i| {
+                i.raw
+                    .dropped_files
+                    .drain(..)
+                    .filter_map(|f| f.path)
+                    .collect()
+            });
 
-        if !dropped_files.is_empty() {
-            let paths: Vec<std::path::PathBuf> =
-                dropped_files.into_iter().filter_map(|f| f.path).collect();
-
-            if !paths.is_empty() {
-                self.load_files(paths);
-            }
+        if !paths.is_empty() {
+            self.load_files(paths);
         }
     }
 }
@@ -299,10 +347,7 @@ impl eframe::App for CertViewerApp {
             self.theme_applied = true;
         }
 
-        // Handle keyboard shortcuts
         self.handle_shortcuts(ctx);
-
-        // Handle drag and drop
         self.handle_drag_drop(ctx);
 
         // ── Top panel: toolbar ─────────────────────────────────
@@ -314,7 +359,6 @@ impl eframe::App for CertViewerApp {
                     .stroke(Stroke::new(1.0, theme::BORDER)),
             )
             .show(ctx, |ui| {
-                // Menu bar
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Certificate Viewer")
@@ -327,7 +371,6 @@ impl eframe::App for CertViewerApp {
                     ui.separator();
                     ui.add_space(8.0);
 
-                    // Quick action buttons
                     let btn =
                         egui::Button::new(RichText::new("Open Files...").size(theme::FONT_BODY))
                             .corner_radius(CornerRadius::same(4));
@@ -335,7 +378,6 @@ impl eframe::App for CertViewerApp {
                         self.open_file_dialog();
                     }
 
-                    // Clear all button
                     if !self.certs.is_empty() {
                         let clear_btn =
                             egui::Button::new(RichText::new("Clear All").size(theme::FONT_BODY))
@@ -345,7 +387,6 @@ impl eframe::App for CertViewerApp {
                         }
                     }
 
-                    // Keyboard shortcut hints
                     ui.add_space(8.0);
                     ui.separator();
                     ui.add_space(8.0);
@@ -360,7 +401,6 @@ impl eframe::App for CertViewerApp {
                 if !self.certs.is_empty() {
                     ui.add_space(4.0);
 
-                    // Collect tab data to avoid borrow issues
                     let tab_data: Vec<(usize, String, bool, ValidityStatus)> = self
                         .certs
                         .iter()
@@ -400,18 +440,7 @@ impl eframe::App for CertViewerApp {
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
-                                            // Validity indicator
-                                            let indicator_color = match validity {
-                                                ValidityStatus::Valid => {
-                                                    egui::Color32::from_rgb(80, 200, 120)
-                                                }
-                                                ValidityStatus::NotYetValid => {
-                                                    egui::Color32::from_rgb(255, 200, 80)
-                                                }
-                                                ValidityStatus::Expired => {
-                                                    egui::Color32::from_rgb(255, 100, 100)
-                                                }
-                                            };
+                                            let indicator_color = theme::validity_color(*validity);
                                             ui.label(RichText::new("*").color(indicator_color));
 
                                             let text = RichText::new(label)
@@ -442,7 +471,6 @@ impl eframe::App for CertViewerApp {
                             });
                         });
 
-                    // Apply action after rendering
                     if let Some(act) = action {
                         match act {
                             TabAction::Select(i) => self.selected_tab = i,
@@ -463,36 +491,29 @@ impl eframe::App for CertViewerApp {
                 // Info banner
                 if let Some(ref msg) = self.info_msg {
                     Frame::new()
-                        .fill(egui::Color32::from_rgb(30, 80, 50))
+                        .fill(theme::BANNER_INFO_BG)
                         .corner_radius(CornerRadius::same(4))
                         .inner_margin(Margin::same(10))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("[i]")
-                                        .color(egui::Color32::from_rgb(120, 255, 180)),
-                                );
-                                ui.label(
-                                    RichText::new(msg)
-                                        .color(egui::Color32::from_rgb(200, 255, 220)),
-                                );
+                                ui.label(RichText::new("[i]").color(theme::BANNER_INFO_TEXT));
+                                ui.label(RichText::new(msg).color(theme::BANNER_INFO_VALUE));
                             });
                         });
                     ui.add_space(8.0);
-                    // Auto-clear info message
                     self.info_msg = None;
                 }
 
-                // Error banner
-                if let Some(ref msg) = self.error_msg {
+                // Error banners
+                for msg in &self.error_msgs {
                     Frame::new()
-                        .fill(egui::Color32::from_rgb(80, 30, 30))
+                        .fill(theme::BANNER_ERROR_BG)
                         .corner_radius(CornerRadius::same(4))
                         .inner_margin(Margin::same(10))
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new(format!("[!] {msg}"))
-                                    .color(egui::Color32::from_rgb(255, 120, 120)),
+                                    .color(theme::BANNER_ERROR_TEXT),
                             );
                         });
                     ui.add_space(8.0);
@@ -501,15 +522,13 @@ impl eframe::App for CertViewerApp {
                 if self.certs.is_empty() {
                     draw_empty_state(ui);
                 } else if let Some(cert) = self.certs.get(self.selected_tab) {
-                    // Clone needed data to avoid borrow issues
-                    let cert_clone = cert.clone();
                     let mut to_copy: Option<String> = None;
-                    draw_certificate(ui, &cert_clone, |text| {
+                    draw_certificate(ui, cert, &mut |text| {
                         to_copy = Some(text);
                     });
 
-                    // Apply copy after drawing
                     if let Some(text) = to_copy {
+                        // Re-borrow self for clipboard
                         self.copy_to_clipboard(text);
                     }
                 }
@@ -556,16 +575,12 @@ fn draw_empty_state(ui: &mut Ui) {
 
 // ── Certificate rendering ──────────────────────────────────────────
 
-fn draw_certificate<F>(ui: &mut Ui, cert: &ParsedCert, mut on_copy: F)
+fn draw_certificate<F>(ui: &mut Ui, cert: &ParsedCert, on_copy: &mut F)
 where
     F: FnMut(String),
 {
-    // Header card with validity status
-    let (status_text, status_color) = match cert.validity_status {
-        ValidityStatus::Valid => ("[OK] Valid", egui::Color32::from_rgb(80, 200, 120)),
-        ValidityStatus::NotYetValid => ("[!] Not Yet Valid", egui::Color32::from_rgb(255, 200, 80)),
-        ValidityStatus::Expired => ("[X] Expired", egui::Color32::from_rgb(255, 100, 100)),
-    };
+    let status_text = theme::validity_text(cert.validity_status);
+    let status_color = theme::validity_color(cert.validity_status);
 
     Frame::new()
         .fill(theme::BG_SECONDARY)
@@ -614,17 +629,7 @@ where
                         egui::Button::new(RichText::new("Copy PEM").size(theme::FONT_BODY))
                             .corner_radius(CornerRadius::same(4));
                     if ui.add(copy_btn).clicked() {
-                        // Generate a PEM representation (simplified)
-                        let pem_data = format!(
-                            "Subject: {}\nIssuer: {}\nSerial: {}\nValid: {} - {}\nSHA-256: {}",
-                            cert.subject,
-                            cert.issuer,
-                            cert.serial_number,
-                            cert.not_before,
-                            cert.not_after,
-                            cert.sha256_fingerprint
-                        );
-                        on_copy(pem_data);
+                        on_copy(cert.to_pem());
                     }
                 });
             });
@@ -632,12 +637,11 @@ where
 
     ui.add_space(theme::SECTION_SPACING);
 
-    // Scrollable field tree
     ScrollArea::vertical()
         .auto_shrink([false; 2])
         .show(ui, |ui| {
             for field in &cert.fields {
-                draw_field(ui, field, 0, &mut on_copy);
+                draw_field(ui, field, 0, on_copy);
             }
         });
 }
@@ -651,10 +655,8 @@ where
         .with(field.value.as_deref().unwrap_or("").get(..20).unwrap_or(""));
 
     if field.has_children() {
-        // Collapsible container
         let is_root = depth == 0;
 
-        // Add "Fingerprints" prefix
         let prefix = if depth == 0 {
             match field.label.as_str() {
                 "Version" => "[V]",
@@ -707,7 +709,6 @@ where
                     .id_salt(id)
                     .default_open(is_root && !field.label.contains("Signature Value"))
                     .show(ui, |ui| {
-                        // Summary value (e.g. Issuer DN string)
                         if let Some(ref val) = field.value {
                             ui.horizontal_wrapped(|ui| {
                                 ui.add_space(8.0);
@@ -729,7 +730,6 @@ where
             ui.add_space(4.0);
         }
     } else {
-        // Leaf: label -> value with context menu for copying
         ui.horizontal_wrapped(|ui| {
             ui.add_space(4.0);
             ui.label(
@@ -754,7 +754,6 @@ where
                         .color(theme::TEXT_VALUE),
                 );
 
-                // Context menu for copying
                 response.context_menu(|ui| {
                     if ui.button("Copy value").clicked() {
                         on_copy(val.clone());
@@ -780,29 +779,33 @@ mod tests {
     fn test_app_initial_state() {
         let app = CertViewerApp {
             certs: Vec::new(),
+            cert_index: HashMap::new(),
             selected_tab: 0,
-            error_msg: None,
+            error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
+            clipboard: None,
         };
         assert!(app.certs.is_empty());
         assert_eq!(app.selected_tab, 0);
-        assert!(app.error_msg.is_none());
+        assert!(app.error_msgs.is_empty());
     }
 
     #[test]
     fn test_load_valid_certificate() {
         let mut app = CertViewerApp {
             certs: Vec::new(),
+            cert_index: HashMap::new(),
             selected_tab: 0,
-            error_msg: None,
+            error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
+            clipboard: None,
         };
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
         assert_eq!(app.certs.len(), 1);
-        assert!(app.error_msg.is_none());
+        assert!(app.error_msgs.is_empty());
         assert_eq!(app.selected_tab, 0);
     }
 
@@ -810,50 +813,53 @@ mod tests {
     fn test_load_invalid_certificate_sets_error() {
         let mut app = CertViewerApp {
             certs: Vec::new(),
+            cert_index: HashMap::new(),
             selected_tab: 0,
-            error_msg: None,
+            error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
+            clipboard: None,
         };
         app.load_certificate_bytes(b"not a certificate");
         assert!(app.certs.is_empty());
-        assert!(app.error_msg.is_some());
+        assert!(!app.error_msgs.is_empty());
     }
 
     #[test]
     fn test_load_duplicate_certificate() {
-        // Loading the same certificate twice should only keep one copy
         let mut app = CertViewerApp {
             certs: Vec::new(),
+            cert_index: HashMap::new(),
             selected_tab: 0,
-            error_msg: None,
+            error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
+            clipboard: None,
         };
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
         assert_eq!(app.certs.len(), 1);
         assert_eq!(app.selected_tab, 0);
 
-        // Load the same certificate again - should not add a duplicate
         app.load_certificate_bytes(pem);
-        assert_eq!(app.certs.len(), 1); // Still only 1 certificate
-        assert_eq!(app.selected_tab, 0); // Tab stays at 0
+        assert_eq!(app.certs.len(), 1);
+        assert_eq!(app.selected_tab, 0);
     }
 
     #[test]
     fn test_validity_status_display() {
         let mut app = CertViewerApp {
             certs: Vec::new(),
+            cert_index: HashMap::new(),
             selected_tab: 0,
-            error_msg: None,
+            error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
+            clipboard: None,
         };
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
 
-        // Check that validity status is set
         let cert = &app.certs[0];
         assert!(matches!(
             cert.validity_status,

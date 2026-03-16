@@ -3,7 +3,7 @@
 //! This module handles parsing of X.509 certificate extensions into
 //! displayable field trees.
 
-use super::{CertField, OID_REGISTRY};
+use super::{CertField, describe_oid};
 use x509_parser::extensions::{
     AuthorityInfoAccess, AuthorityKeyIdentifier, BasicConstraints, CRLDistributionPoint,
     DistributionPointName, ExtendedKeyUsage, InhibitAnyPolicy, IssuerAlternativeName,
@@ -12,6 +12,23 @@ use x509_parser::extensions::{
     SubjectInfoAccess,
 };
 use x509_parser::prelude::*;
+
+// ── Constants ────────────────────────────────────────────────────────
+
+/// Milliseconds per second for timestamp conversion.
+const MILLIS_PER_SECOND: u32 = 1_000_000;
+
+/// IPv6 address size in bytes.
+const IPV6_SIZE: usize = 16;
+
+/// IPv4 address size in bytes.
+const IPV4_SIZE: usize = 4;
+
+/// IPv4 with netmask size in bytes.
+const IPV4_WITH_NETMASK_SIZE: usize = 8;
+
+/// IPv6 with netmask size in bytes.
+const IPV6_WITH_NETMASK_SIZE: usize = 32;
 
 /// Build a certificate field from an X.509 extension.
 pub fn build_extension_field(ext: &X509Extension<'_>) -> CertField {
@@ -124,12 +141,10 @@ fn parse_aki(aki: &AuthorityKeyIdentifier<'_>, children: &mut Vec<CertField>) {
         ));
     }
     if let Some(issuer) = &aki.authority_cert_issuer {
-        let issuers: String = issuer
-            .iter()
-            .map(format_general_name)
-            .collect::<Vec<_>>()
-            .join(", ");
-        children.push(CertField::leaf("Authority Cert Issuer", issuers));
+        children.push(CertField::leaf(
+            "Authority Cert Issuer",
+            format_general_name_list(issuer),
+        ));
     }
     if let Some(serial) = &aki.authority_cert_serial {
         children.push(CertField::leaf(
@@ -146,56 +161,55 @@ fn parse_basic_constraints(bc: &BasicConstraints, children: &mut Vec<CertField>)
     }
 }
 
-type KeyUsageChecker = fn(&KeyUsage) -> bool;
-type EkuChecker = fn(&ExtendedKeyUsage) -> bool;
+/// Helper macro for generating flag lists from boolean checks.
+macro_rules! flag_list {
+    ($value:expr, $($flag:expr => $check:expr),* $(,)?) => {{
+        let mut flags = Vec::new();
+        $(
+            if $check {
+                flags.push($flag);
+            }
+        )*
+        flags
+    }};
+}
 
 fn parse_key_usage(ku: &KeyUsage, children: &mut Vec<CertField>) {
-    const KEY_USAGE_FLAGS: &[(&str, KeyUsageChecker)] = &[
-        ("Digital Signature", |k| k.digital_signature()),
-        ("Non Repudiation (Content Commitment)", |k| {
-            k.non_repudiation()
-        }),
-        ("Key Encipherment", |k| k.key_encipherment()),
-        ("Data Encipherment", |k| k.data_encipherment()),
-        ("Key Agreement", |k| k.key_agreement()),
-        ("Key Cert Sign", |k| k.key_cert_sign()),
-        ("CRL Sign", |k| k.crl_sign()),
-        ("Encipher Only", |k| k.encipher_only()),
-        ("Decipher Only", |k| k.decipher_only()),
+    let flags = flag_list![
+        ku,
+        "Digital Signature" => ku.digital_signature(),
+        "Non Repudiation (Content Commitment)" => ku.non_repudiation(),
+        "Key Encipherment" => ku.key_encipherment(),
+        "Data Encipherment" => ku.data_encipherment(),
+        "Key Agreement" => ku.key_agreement(),
+        "Key Cert Sign" => ku.key_cert_sign(),
+        "CRL Sign" => ku.crl_sign(),
+        "Encipher Only" => ku.encipher_only(),
+        "Decipher Only" => ku.decipher_only(),
     ];
-
-    let flags: Vec<&str> = KEY_USAGE_FLAGS
-        .iter()
-        .filter(|(_, check)| check(ku))
-        .map(|(name, _)| *name)
-        .collect();
 
     children.push(CertField::leaf("Usages", flags.join(", ")));
 }
 
 fn parse_extended_key_usage(eku: &ExtendedKeyUsage, children: &mut Vec<CertField>) {
-    const EKU_FLAGS: &[(&str, EkuChecker)] = &[
-        ("Server Auth", |e| e.server_auth),
-        ("Client Auth", |e| e.client_auth),
-        ("Code Signing", |e| e.code_signing),
-        ("Email Protection", |e| e.email_protection),
-        ("Time Stamping", |e| e.time_stamping),
-        ("OCSP Signing", |e| e.ocsp_signing),
-        ("Any", |e| e.any),
-    ];
+    let mut usages: Vec<String> = flag_list![
+        eku,
+        "Server Auth" => eku.server_auth,
+        "Client Auth" => eku.client_auth,
+        "Code Signing" => eku.code_signing,
+        "Email Protection" => eku.email_protection,
+        "Time Stamping" => eku.time_stamping,
+        "OCSP Signing" => eku.ocsp_signing,
+        "Any" => eku.any,
+    ]
+    .into_iter()
+    .map(|s| s.to_string())
+    .collect();
 
-    let mut usages: Vec<String> = EKU_FLAGS
-        .iter()
-        .filter(|(_, check)| check(eku))
-        .map(|(name, _)| name.to_string())
-        .collect();
+    // Add custom OIDs
+    usages.extend(eku.other.iter().map(|oid| describe_oid(oid)));
 
-    for oid in &eku.other {
-        usages.push(describe_oid(oid));
-    }
-
-    let usages_str: String = usages.join(", ");
-    children.push(CertField::leaf("Usages", usages_str));
+    children.push(CertField::leaf("Usages", usages.join(", ")));
 }
 
 fn parse_crl_distribution_points(crldp: &[CRLDistributionPoint], children: &mut Vec<CertField>) {
@@ -204,52 +218,29 @@ fn parse_crl_distribution_points(crldp: &[CRLDistributionPoint], children: &mut 
 
         if let Some(dn) = &dp.distribution_point {
             let desc = match dn {
-                DistributionPointName::FullName(names) => names
-                    .iter()
-                    .map(format_general_name)
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                DistributionPointName::FullName(names) => format_general_name_list(names),
                 DistributionPointName::NameRelativeToCRLIssuer(rdn) => format!("{rdn:?}"),
             };
             dp_children.push(CertField::leaf("Location", desc));
         }
 
         if let Some(reasons) = &dp.reasons {
-            let mut reason_list = Vec::new();
-            if reasons.key_compromise() {
-                reason_list.push("Key Compromise");
-            }
-            if reasons.ca_compromise() {
-                reason_list.push("CA Compromise");
-            }
-            if reasons.affilation_changed() {
-                reason_list.push("Affiliation Changed");
-            }
-            if reasons.superseded() {
-                reason_list.push("Superseded");
-            }
-            if reasons.cessation_of_operation() {
-                reason_list.push("Cessation of Operation");
-            }
-            if reasons.certificate_hold() {
-                reason_list.push("Certificate Hold");
-            }
-            if reasons.privelege_withdrawn() {
-                reason_list.push("Privilege Withdrawn");
-            }
-            if reasons.aa_compromise() {
-                reason_list.push("AA Compromise");
-            }
+            let reason_list = flag_list![
+                reasons,
+                "Key Compromise" => reasons.key_compromise(),
+                "CA Compromise" => reasons.ca_compromise(),
+                "Affiliation Changed" => reasons.affilation_changed(),
+                "Superseded" => reasons.superseded(),
+                "Cessation of Operation" => reasons.cessation_of_operation(),
+                "Certificate Hold" => reasons.certificate_hold(),
+                "Privilege Withdrawn" => reasons.privelege_withdrawn(),
+                "AA Compromise" => reasons.aa_compromise(),
+            ];
             dp_children.push(CertField::leaf("Reasons", reason_list.join(", ")));
         }
 
         if let Some(issuer) = &dp.crl_issuer {
-            let issuers: String = issuer
-                .iter()
-                .map(format_general_name)
-                .collect::<Vec<_>>()
-                .join(", ");
-            dp_children.push(CertField::leaf("CRL Issuer", issuers));
+            dp_children.push(CertField::leaf("CRL Issuer", format_general_name_list(issuer)));
         }
 
         if !dp_children.is_empty() {
@@ -339,9 +330,10 @@ fn parse_sct_list(sct_list: &[SignedCertificateTimestamp], children: &mut Vec<Ce
 fn format_sct_timestamp(timestamp: u64) -> String {
     // SCT timestamp is milliseconds since Unix epoch
     use chrono::{TimeZone, Utc};
-    let secs = (timestamp / 1000) as i64;
-    let millis = (timestamp % 1000) as u32;
-    match Utc.timestamp_opt(secs, millis * 1_000_000) {
+    const MILLIS_PER_SEC: u64 = 1000;
+    let secs = (timestamp / MILLIS_PER_SEC) as i64;
+    let millis = (timestamp % MILLIS_PER_SEC) as u32;
+    match Utc.timestamp_opt(secs, millis * MILLIS_PER_SECOND) {
         chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
         _ => format!("{} ms", timestamp),
     }
@@ -464,45 +456,25 @@ fn parse_subject_info_access(sia: &SubjectInfoAccess<'_>, children: &mut Vec<Cer
 }
 
 fn parse_ns_cert_type(nsct: &x509_parser::extensions::NSCertType, children: &mut Vec<CertField>) {
-    let mut usages: Vec<&str> = Vec::new();
-    if nsct.ssl_client() {
-        usages.push("SSL Client");
-    }
-    if nsct.ssl_server() {
-        usages.push("SSL Server");
-    }
-    if nsct.smime() {
-        usages.push("S/MIME");
-    }
-    if nsct.object_signing() {
-        usages.push("Object Signing");
-    }
-    if nsct.ssl_ca() {
-        usages.push("SSL CA");
-    }
-    if nsct.smime_ca() {
-        usages.push("S/MIME CA");
-    }
-    if nsct.object_signing_ca() {
-        usages.push("Object Signing CA");
-    }
+    let usages = flag_list![
+        nsct,
+        "SSL Client" => nsct.ssl_client(),
+        "SSL Server" => nsct.ssl_server(),
+        "S/MIME" => nsct.smime(),
+        "Object Signing" => nsct.object_signing(),
+        "SSL CA" => nsct.ssl_ca(),
+        "S/MIME CA" => nsct.smime_ca(),
+        "Object Signing CA" => nsct.object_signing_ca(),
+    ];
 
     children.push(CertField::leaf("Usages", usages.join(", ")));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-fn describe_oid(oid: &oid_registry::Oid<'_>) -> String {
-    if let Some(entry) = OID_REGISTRY.get(oid) {
-        let name = entry.sn();
-        if name.is_empty() {
-            entry.description().to_string()
-        } else {
-            name.to_string()
-        }
-    } else {
-        format!("{oid}")
-    }
+/// Format a slice of GeneralNames as a comma-separated string.
+fn format_general_name_list(names: &[GeneralName<'_>]) -> String {
+    names.iter().map(format_general_name).collect::<Vec<_>>().join(", ")
 }
 
 fn format_general_name(gn: &GeneralName<'_>) -> String {
@@ -511,25 +483,26 @@ fn format_general_name(gn: &GeneralName<'_>) -> String {
         GeneralName::RFC822Name(s) => format!("Email: {s}"),
         GeneralName::URI(s) => format!("URI: {s}"),
         GeneralName::IPAddress(bytes) => {
-            if bytes.len() == 4 {
-                format!("IP: {}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
-            } else if bytes.len() == 16 {
-                format!("IP: {}", format_ipv6(bytes))
-            } else if bytes.len() == 8 {
-                // IPv4 with netmask
-                format!(
-                    "IP: {}.{}.{}.{}/{}.{}.{}.{}",
-                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]
-                )
-            } else if bytes.len() == 32 {
-                // IPv6 with netmask
-                format!(
-                    "IP: {}/{}",
-                    format_ipv6(&bytes[..16]),
-                    format_ipv6(&bytes[16..])
-                )
-            } else {
-                format!("IP: {}", hex::encode(bytes))
+            match bytes.len() {
+                IPV4_SIZE => {
+                    format!("IP: {}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
+                }
+                IPV6_SIZE => format!("IP: {}", format_ipv6(bytes)),
+                IPV4_WITH_NETMASK_SIZE => {
+                    format!(
+                        "IP: {}.{}.{}.{}/{}.{}.{}.{}",
+                        bytes[0], bytes[1], bytes[2], bytes[3],
+                        bytes[4], bytes[5], bytes[6], bytes[7]
+                    )
+                }
+                IPV6_WITH_NETMASK_SIZE => {
+                    format!(
+                        "IP: {}/{}",
+                        format_ipv6(&bytes[..IPV6_SIZE]),
+                        format_ipv6(&bytes[IPV6_SIZE..])
+                    )
+                }
+                _ => format!("IP: {}", hex::encode(bytes)),
             }
         }
         GeneralName::DirectoryName(name) => format!("DN: {name}"),
@@ -544,7 +517,7 @@ fn format_general_name(gn: &GeneralName<'_>) -> String {
 }
 
 fn format_ipv6(bytes: &[u8]) -> String {
-    assert!(bytes.len() == 16, "IPv6 must be 16 bytes");
+    assert_eq!(bytes.len(), IPV6_SIZE, "IPv6 must be 16 bytes");
     let segments: Vec<String> = bytes
         .chunks(2)
         .map(|chunk| format!("{:02x}{:02x}", chunk[0], chunk[1]))

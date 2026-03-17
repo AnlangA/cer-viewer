@@ -6,10 +6,12 @@
 //! high-level decryption support yet. This module provides format detection and
 //! basic parsing structure. Full decryption support will be added later.
 
+#![allow(dead_code)]
+
 use crate::cert::{CertError, Result};
 use crate::security::ProtectedString;
 use der::Decode;
-use pkcs12::{Pfx, PKCS_12_CERT_BAG_OID, PKCS_12_KEY_BAG_OID, PKCS_12_PKCS8_KEY_BAG_OID};
+use pkcs12::Pfx;
 use std::fmt;
 
 /// Parsed PKCS#12 certificate bundle.
@@ -54,7 +56,7 @@ impl ParsedPkcs12 {
         if pfx.mac_data.is_some() {
             return Err(CertError::parse(
                 "Password-protected PKCS#12 files are not yet supported. \
-                The underlying pkcs12 crate is still under development."
+                The underlying pkcs12 crate is still under development.",
             ));
         }
 
@@ -121,8 +123,7 @@ pub fn is_pkcs12(data: &[u8]) -> bool {
 ///
 /// This checks if the MAC data is present, which indicates password protection.
 pub fn requires_password(data: &[u8]) -> Result<bool> {
-    let pfx = Pfx::from_der(data)
-        .map_err(|e| CertError::parse(format!("Invalid PKCS#12: {e}")))?;
+    let pfx = Pfx::from_der(data).map_err(|e| CertError::parse(format!("Invalid PKCS#12: {e}")))?;
 
     Ok(pfx.mac_data.is_some())
 }

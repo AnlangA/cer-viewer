@@ -1,5 +1,7 @@
 //! Base64 encoding/decoding utilities.
 
+#![allow(dead_code)]
+
 use crate::cert::Result;
 use base64::prelude::*;
 

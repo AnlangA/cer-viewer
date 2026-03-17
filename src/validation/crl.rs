@@ -3,6 +3,8 @@
 //! This module provides functionality to parse CRLs and verify
 //! certificate revocation status.
 
+#![allow(dead_code)]
+
 use crate::cert::ParsedCert;
 use crate::validation::revocation::RevocationStatus;
 use std::time::SystemTime;
@@ -113,7 +115,8 @@ impl CertificateRevocationList {
                     .collect();
 
                 use base64::Engine;
-                let der_data = base64::prelude::BASE64_STANDARD.decode(&base64_data)
+                let der_data = base64::prelude::BASE64_STANDARD
+                    .decode(&base64_data)
                     .map_err(|_| CrlError::InvalidData("Invalid base64 in PEM".into()))?;
 
                 Self::from_der(&der_data)
@@ -227,11 +230,16 @@ impl CrlClient {
         // Look for CRL Distribution Points extension
         // OID: 2.5.29.31 (cRLDistributionPoints)
         for field in &cert.fields {
-            if field.label.contains("CRL Distribution Points") || field.label.contains("cRLDistributionPoints") {
+            if field.label.contains("CRL Distribution Points")
+                || field.label.contains("cRLDistributionPoints")
+            {
                 for child in &field.children {
                     for subchild in &child.children {
                         if let Some(ref url) = subchild.value {
-                            if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("ldap://") {
+                            if url.starts_with("http://")
+                                || url.starts_with("https://")
+                                || url.starts_with("ldap://")
+                            {
                                 urls.push(url.clone());
                             }
                         }
@@ -295,7 +303,7 @@ impl CrlClient {
     #[cfg(not(feature = "network"))]
     pub fn download(&self, _url: &str) -> Result<CertificateRevocationList, CrlError> {
         Err(CrlError::NetworkError(
-            "Network feature not enabled. Build with --features network".into()
+            "Network feature not enabled. Build with --features network".into(),
         ))
     }
 
@@ -455,10 +463,7 @@ mod tests {
 
         let found = crl.find_entry(&[0x01, 0x02, 0x03]);
         assert!(found.is_some());
-        assert_eq!(
-            found.unwrap().reason,
-            Some(RevocationReason::KeyCompromise)
-        );
+        assert_eq!(found.unwrap().reason, Some(RevocationReason::KeyCompromise));
     }
 
     #[test]

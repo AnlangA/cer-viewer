@@ -14,7 +14,11 @@ fn test_load_leaf_certificate() {
     let data = std::fs::read(&cert_path).expect("Failed to read certificate");
     let cert = cer_viewer::cert::parse_certificate(&data);
 
-    assert!(cert.is_ok(), "Failed to parse certificate: {:?}", cert.err());
+    assert!(
+        cert.is_ok(),
+        "Failed to parse certificate: {:?}",
+        cert.err()
+    );
     let cert = cert.unwrap();
 
     assert!(!cert.subject.is_empty());
@@ -56,7 +60,9 @@ fn test_load_ec_certificate() {
     let cert = cert.unwrap();
 
     // Check that it has EC public key info
-    let spki_field = cert.fields.iter()
+    let spki_field = cert
+        .fields
+        .iter()
         .find(|f| f.label == "Subject Public Key Info");
     assert!(spki_field.is_some(), "Should have SPKI field");
 }
@@ -76,7 +82,10 @@ fn test_load_certificate_chain() {
     assert!(!certs.is_empty(), "Should have at least one certificate");
 
     let valid_certs: Vec<_> = certs.into_iter().filter_map(|r| r.ok()).collect();
-    assert!(valid_certs.len() >= 2, "Should have at least 2 certificates in chain");
+    assert!(
+        valid_certs.len() >= 2,
+        "Should have at least 2 certificates in chain"
+    );
 
     // Build chain
     let chain = cer_viewer::cert::CertChain::build(valid_certs);
@@ -143,10 +152,17 @@ fn test_load_ec_private_key() {
     let data = std::fs::read(&key_path).expect("Failed to read EC private key");
     let key = cer_viewer::formats::keys::ParsedPrivateKey::from_pem(&data);
 
-    assert!(key.is_ok(), "Failed to parse EC private key: {:?}", key.err());
+    assert!(
+        key.is_ok(),
+        "Failed to parse EC private key: {:?}",
+        key.err()
+    );
     let key = key.unwrap();
 
-    assert!(matches!(key.key_type, cer_viewer::formats::keys::KeyType::Ec));
+    assert!(matches!(
+        key.key_type,
+        cer_viewer::formats::keys::KeyType::Ec
+    ));
 }
 
 /// Test CSR loading.
@@ -228,7 +244,9 @@ fn test_all_fixture_certificates_parseable() {
     let mut error_count = 0;
 
     for dir in cert_dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
 
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
@@ -236,7 +254,9 @@ fn test_all_fixture_certificates_parseable() {
                 continue;
             }
 
-            let Ok(data) = std::fs::read(&path) else { continue };
+            let Ok(data) = std::fs::read(&path) else {
+                continue;
+            };
 
             match cer_viewer::cert::parse_certificate(&data) {
                 Ok(_) => parse_count += 1,
@@ -248,6 +268,12 @@ fn test_all_fixture_certificates_parseable() {
         }
     }
 
-    println!("Parsed {} certificate fixtures, {} errors", parse_count, error_count);
-    assert!(parse_count >= 5, "Should parse at least 5 certificate fixtures");
+    println!(
+        "Parsed {} certificate fixtures, {} errors",
+        parse_count, error_count
+    );
+    assert!(
+        parse_count >= 5,
+        "Should parse at least 5 certificate fixtures"
+    );
 }

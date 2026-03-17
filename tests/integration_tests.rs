@@ -14,7 +14,11 @@ fn test_load_baidu_certificate() {
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
     let result = cer_viewer::cert::parse_certificate(&data);
 
-    assert!(result.is_ok(), "Failed to parse certificate: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse certificate: {:?}",
+        result.err()
+    );
 
     let cert = result.unwrap();
     assert!(!cert.subject.is_empty());
@@ -37,7 +41,12 @@ fn test_parse_multiple_certificates() {
     assert!(!results.is_empty(), "No certificates found");
 
     for (i, result) in results.iter().enumerate() {
-        assert!(result.is_ok(), "Certificate {} failed to parse: {:?}", i, result.as_ref().err());
+        assert!(
+            result.is_ok(),
+            "Certificate {} failed to parse: {:?}",
+            i,
+            result.as_ref().err()
+        );
     }
 }
 

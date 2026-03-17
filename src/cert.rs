@@ -3,18 +3,18 @@
 //! This module converts raw PEM/DER certificate bytes into a tree of [`CertField`]
 //! nodes that the UI can render as a collapsible hierarchy.
 
+mod chain;
 mod error;
 mod extensions;
-mod chain;
 pub mod format;
 
-pub use error::{CertError, Result};
 pub use chain::{CertChain, ChainCert, ChainPosition, ChainValidationStatus};
+pub use error::{CertError, Result};
 
+use serde::Serialize;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use x509_parser::prelude::*;
-use serde::Serialize;
 
 use crate::utils::{describe_oid, format_bytes_hex_colon as format_bytes_hex, format_hex_block};
 
@@ -130,7 +130,7 @@ impl std::fmt::Display for CertId {
 /// for UI display. The `fields` vector contains the hierarchical representation
 /// of certificate elements.
 #[derive(Debug, Clone, Serialize)]
-#[expect(dead_code)] // Fields are kept for future features (export, search, etc.)
+#[allow(dead_code)] // Fields are kept for future features (export, search, etc.)
 pub struct ParsedCert {
     /// Unique identifier for this certificate (SHA-256 based).
     pub id: CertId,

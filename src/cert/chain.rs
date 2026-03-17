@@ -4,7 +4,9 @@
 //! showing the hierarchical relationship from leaf certificate through
 //! intermediates to the root CA.
 
-use crate::cert::{CertId, ParsedCert, ValidityStatus};
+#![allow(dead_code)]
+
+use crate::cert::{ParsedCert, ValidityStatus};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -106,9 +108,7 @@ impl CertChain {
         }
 
         // Find leaf certificates (not issuers of any other cert)
-        let mut leaf_indices: Vec<usize> = (0..certs.len())
-            .filter(|&i| !is_issuer[i])
-            .collect();
+        let mut leaf_indices: Vec<usize> = (0..certs.len()).filter(|&i| !is_issuer[i]).collect();
 
         // If no leaf found (circular or all self-signed), pick the one with non-self issuer
         if leaf_indices.is_empty() {
@@ -245,10 +245,7 @@ impl CertChain {
             ChainValidationStatus::BrokenLinks => "✗ Broken links in chain",
             ChainValidationStatus::Empty => "Empty chain",
         };
-        children.push(crate::cert::CertField::leaf(
-            "Chain Status",
-            status_text,
-        ));
+        children.push(crate::cert::CertField::leaf("Chain Status", status_text));
 
         // Add chain length
         children.push(crate::cert::CertField::leaf(
@@ -260,9 +257,7 @@ impl CertChain {
         for (i, chain_cert) in self.certificates.iter().enumerate() {
             let position_label = match chain_cert.position {
                 ChainPosition::Leaf => "Leaf",
-                ChainPosition::Intermediate { depth } => {
-                    &format!("Intermediate (depth {})", depth)
-                }
+                ChainPosition::Intermediate { depth } => &format!("Intermediate (depth {})", depth),
                 ChainPosition::Root => "Root CA",
             };
 
@@ -272,7 +267,11 @@ impl CertChain {
                 crate::cert::CertField::leaf("Issuer", &chain_cert.cert.issuer),
                 crate::cert::CertField::leaf(
                     "Valid",
-                    if chain_cert.signature_valid { "Yes" } else { "No" },
+                    if chain_cert.signature_valid {
+                        "Yes"
+                    } else {
+                        "No"
+                    },
                 ),
                 crate::cert::CertField::leaf(
                     "Validity",
@@ -301,6 +300,7 @@ fn validity_status_text(status: ValidityStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cert::CertId;
 
     fn create_test_cert(subject: &str, issuer: &str) -> ParsedCert {
         ParsedCert {

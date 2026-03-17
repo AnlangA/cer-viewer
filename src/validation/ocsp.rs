@@ -3,9 +3,10 @@
 //! This module provides functionality to parse OCSP responses and verify
 //! certificate revocation status through OCSP.
 
+#![allow(dead_code)]
+
 use crate::cert::ParsedCert;
 use crate::validation::revocation::RevocationStatus;
-use der::{Decode, Encode, Tagged};
 use std::time::SystemTime;
 
 /// OCSP response type.
@@ -218,7 +219,9 @@ impl OcspClient {
         for field in &cert.fields {
             if field.label.contains("Authority Information Access") || field.label.contains("AIA") {
                 for child in &field.children {
-                    if child.label.contains("OCSP") || child.label.contains("On-line Certificate Status") {
+                    if child.label.contains("OCSP")
+                        || child.label.contains("On-line Certificate Status")
+                    {
                         if let Some(ref url) = child.value {
                             if url.starts_with("http://") || url.starts_with("https://") {
                                 return Some(url.clone());
@@ -308,14 +311,8 @@ mod tests {
     #[test]
     fn test_ocsp_response_type_from_status_code() {
         // Test status code mapping
-        assert_eq!(
-            OcspResponseType::Successful as i32,
-            0
-        );
-        assert_eq!(
-            OcspResponseType::MalformedRequest as i32,
-            1
-        );
+        assert_eq!(OcspResponseType::Successful as i32, 0);
+        assert_eq!(OcspResponseType::MalformedRequest as i32, 1);
     }
 
     #[test]
@@ -346,10 +343,16 @@ mod tests {
             revocation_time: SystemTime::UNIX_EPOCH,
             reason: None,
         });
-        assert_eq!(revoked_response.revocation_status(), RevocationStatus::Revoked);
+        assert_eq!(
+            revoked_response.revocation_status(),
+            RevocationStatus::Revoked
+        );
 
         let unknown_response = OcspResponse::mock(OcspCertStatus::Unknown);
-        assert_eq!(unknown_response.revocation_status(), RevocationStatus::Unknown);
+        assert_eq!(
+            unknown_response.revocation_status(),
+            RevocationStatus::Unknown
+        );
     }
 
     #[test]
@@ -369,10 +372,7 @@ mod tests {
     fn test_ocsp_response_parse_empty() {
         let response = OcspResponse::parse(&[]);
         assert!(response.is_ok());
-        assert!(matches!(
-            response.unwrap().status,
-            OcspCertStatus::Unknown
-        ));
+        assert!(matches!(response.unwrap().status, OcspCertStatus::Unknown));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Certificate chain validation.
 
+#![allow(dead_code)]
+
 use crate::cert::Result;
 
 /// Certificate chain validator.

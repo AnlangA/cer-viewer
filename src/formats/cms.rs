@@ -3,12 +3,14 @@
 //! This module handles PKCS#7/CMS formatted files, typically .p7b or .p7c files,
 //! which contain certificate chains without private keys.
 
+#![allow(dead_code)]
+
 use crate::cert::{CertError, Result};
 use der::{Decode, Encode};
 // The cms crate is re-exported by pkcs12
+use pkcs12::cms::cert::CertificateChoices;
 use pkcs12::cms::content_info::ContentInfo;
 use pkcs12::cms::signed_data::SignedData;
-use pkcs12::cms::cert::CertificateChoices;
 use std::fmt;
 
 /// Parsed CMS/PKCS#7 certificate data.
@@ -69,7 +71,11 @@ impl ParsedCms {
 
 impl fmt::Display for ParsedCms {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CMS/PKCS#7 Archive: {} certificate(s)", self.cert_count())
+        write!(
+            f,
+            "CMS/PKCS#7 Archive: {} certificate(s)",
+            self.cert_count()
+        )
     }
 }
 
@@ -87,10 +93,9 @@ fn extract_signed_data_certs(content_info: &ContentInfo) -> Result<Vec<Vec<u8>>>
             // CertificateChoices can be a Certificate or other types
             // We extract the raw DER bytes by encoding the choice
             let der_bytes = match cert_choice {
-                CertificateChoices::Certificate(cert) => {
-                    cert.to_der()
-                        .map_err(|e| CertError::parse(format!("Failed to encode certificate: {e}")))
-                }
+                CertificateChoices::Certificate(cert) => cert
+                    .to_der()
+                    .map_err(|e| CertError::parse(format!("Failed to encode certificate: {e}"))),
                 // Handle other certificate choices as needed
                 _ => continue,
             }?;
@@ -117,10 +122,10 @@ pub fn is_cms(data: &[u8]) -> bool {
 /// Check if a PEM file might be a CMS/PKCS#7 file.
 pub fn is_pem_cms(data: &[u8]) -> bool {
     let content = String::from_utf8_lossy(data);
-    content.contains("PKCS7") ||
-    content.contains("PKCS#7") ||
-    content.contains("CMS") ||
-    content.contains("CERTIFICATE BAG")
+    content.contains("PKCS7")
+        || content.contains("PKCS#7")
+        || content.contains("CMS")
+        || content.contains("CERTIFICATE BAG")
 }
 
 #[cfg(test)]

@@ -2,8 +2,10 @@
 //!
 //! This module provides raw ASN.1 DER structure visualization.
 
+#![allow(dead_code)]
+
 use crate::cert::CertField;
-use crate::utils::{format_hex_block, describe_oid};
+use crate::utils::{describe_oid, format_hex_block};
 use oid_registry::Oid;
 
 /// ASN.1 tag classes.
@@ -182,7 +184,7 @@ impl Asn1ParseResult {
 
     /// Parse a single ASN.1 element.
     pub fn parse(data: &[u8], offset: usize) -> Self {
-        let start_offset = offset;
+        let _start_offset = offset;
 
         if offset >= data.len() {
             return Self {
@@ -236,12 +238,19 @@ fn parse_asn1_recursive(data: &[u8], offset: usize, depth: usize) -> Vec<CertFie
         "0x{:02X} - {}{}",
         result.tag.raw_tag,
         tag_name,
-        if result.tag.constructed { " (constructed)" } else { " (primitive)" }
+        if result.tag.constructed {
+            " (constructed)"
+        } else {
+            " (primitive)"
+        }
     );
     children.push(CertField::leaf("Tag", tag_info));
 
     // Add length
-    children.push(CertField::leaf("Length", format!("{} bytes", result.length)));
+    children.push(CertField::leaf(
+        "Length",
+        format!("{} bytes", result.length),
+    ));
 
     // Add content info
     if result.valid && result.content_offset < data.len() {
@@ -283,11 +292,12 @@ fn parse_asn1_recursive(data: &[u8], offset: usize, depth: usize) -> Vec<CertFie
         } else {
             // Primitive value - show the content
             let content = &data[result.content_offset..content_end];
-            let content_str = format_asn1_content(content, &result.tag).unwrap_or_else(|| "(invalid content)".to_string());
+            let content_str = format_asn1_content(content, &result.tag)
+                .unwrap_or_else(|| "(invalid content)".to_string());
             children.push(CertField::leaf("Content", content_str));
 
             // Also show hex preview
-            if content.len() > 0 && content.len() <= 64 {
+            if !content.is_empty() && content.len() <= 64 {
                 let hex_preview = hex::encode(content);
                 let formatted = format_hex_block(&hex_preview);
                 children.push(CertField::leaf("Hex", formatted));
@@ -314,7 +324,7 @@ fn format_asn1_content(data: &[u8], tag: &Asn1Tag) -> Option<String> {
     match tag.universal_tag {
         Some(UniversalTag::ObjectIdentifier) => {
             // Try to parse OID
-            if data.len() > 0 && data[0] == 0x06 {
+            if !data.is_empty() && data[0] == 0x06 {
                 // Nested OID - just show hex for now
                 Some(hex::encode(data))
             } else {
@@ -341,12 +351,16 @@ fn format_asn1_content(data: &[u8], tag: &Asn1Tag) -> Option<String> {
             }
         }
         Some(UniversalTag::Null) => Some("NULL".to_string()),
-        Some(UniversalTag::Utf8String) | Some(UniversalTag::PrintableString) | Some(UniversalTag::VisibleString) => {
-            String::from_utf8(data.to_vec()).ok().map(|s| format!("\"{}\"", s))
-        }
-        Some(UniversalTag::BitString) => {
-            Some(format!("{} bits (unused: {})", data.len() * 8, data.first().map_or(0, |&b| b & 0x07)))
-        }
+        Some(UniversalTag::Utf8String)
+        | Some(UniversalTag::PrintableString)
+        | Some(UniversalTag::VisibleString) => String::from_utf8(data.to_vec())
+            .ok()
+            .map(|s| format!("\"{}\"", s)),
+        Some(UniversalTag::BitString) => Some(format!(
+            "{} bits (unused: {})",
+            data.len() * 8,
+            data.first().map_or(0, |&b| b & 0x07)
+        )),
         Some(UniversalTag::UtcTime) | Some(UniversalTag::GeneralizedTime) => {
             // Try to format as time string
             Some(format!("[{} bytes]", data.len()))
@@ -398,7 +412,9 @@ mod tests {
     #[test]
     fn test_parse_oid() {
         // Common OID: 1.2.840.113549.1.1.1 (rsaEncryption)
-        let oid_bytes = [0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+        let oid_bytes = [
+            0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
+        ];
         let result = parse_oid(&oid_bytes);
         assert!(result.is_some());
     }

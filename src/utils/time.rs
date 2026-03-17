@@ -1,5 +1,7 @@
 //! Time and date utilities for certificate validity.
 
+#![allow(dead_code)]
+
 use chrono::{DateTime, Utc};
 
 /// Format an ASN.1 time as a human-readable string.

@@ -85,10 +85,9 @@ pub fn run() -> Result<bool, String> {
         }
     };
 
-    // If no files provided and no subcommand, show help and return
+    // If no files provided and no subcommand, let GUI start
     if cli.files.is_empty() && cli.command.is_none() {
-        println!("No certificate files provided. Use --help for usage information.");
-        return Ok(true);
+        return Ok(false);
     }
 
     // Process subcommands first
@@ -160,8 +159,7 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
 }
 
 fn load_certificates_from_file(path: &PathBuf) -> Result<Vec<ParsedCert>, String> {
-    let data = std::fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let results = cert::parse_certificates(&data);
     let mut certs = Vec::new();
@@ -191,7 +189,10 @@ fn display_certificates(certs: &[ParsedCert], format: OutputFormat, fields_filte
             }
         }
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(certs).unwrap_or_else(|_| "[]".to_string()));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(certs).unwrap_or_else(|_| "[]".to_string())
+            );
         }
     }
 }
@@ -206,9 +207,8 @@ fn print_certificate_text(cert: &ParsedCert, fields_filter: &Option<String>) {
     let show_all = fields_to_show.is_empty();
 
     // Helper to check if a field should be shown
-    let should_show = |name: &str| -> bool {
-        show_all || fields_to_show.iter().any(|f| name.contains(f))
-    };
+    let should_show =
+        |name: &str| -> bool { show_all || fields_to_show.iter().any(|f| name.contains(f)) };
 
     if should_show("subject") {
         println!("Subject: {}", cert.subject);
@@ -236,7 +236,8 @@ fn print_certificate_text(cert: &ParsedCert, fields_filter: &Option<String>) {
 
     // If showing all or extensions requested, show extension count
     if show_all || should_show("extension") {
-        let ext_count = cert.fields
+        let ext_count = cert
+            .fields
             .iter()
             .find(|f| f.label == "Extensions")
             .map(|e| e.children.len())
@@ -295,7 +296,11 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
                 println!("   Issuer:  {}", chain_cert.cert.issuer);
                 println!(
                     "   Valid:   {}",
-                    if chain_cert.signature_valid { "✓ Yes" } else { "✗ No" }
+                    if chain_cert.signature_valid {
+                        "✓ Yes"
+                    } else {
+                        "✗ No"
+                    }
                 );
                 println!();
             }

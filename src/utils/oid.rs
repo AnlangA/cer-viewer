@@ -1,5 +1,7 @@
 //! OID (Object Identifier) utilities.
 
+#![allow(dead_code)]
+
 use oid_registry::OidRegistry;
 use std::sync::LazyLock;
 

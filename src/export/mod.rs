@@ -1,5 +1,7 @@
 //! Export and conversion utilities for certificates and keys.
 
+#![allow(dead_code)]
+
 use crate::cert::{CertError, Result};
 use base64::prelude::*;
 
@@ -32,8 +34,8 @@ pub fn to_der(data: &[u8]) -> Vec<u8> {
 
 /// Convert PEM to DER (extract base64 content).
 pub fn pem_to_der(pem_data: &[u8]) -> Result<Vec<u8>> {
-    let content = std::str::from_utf8(pem_data)
-        .map_err(|e| CertError::pem(format!("Invalid UTF-8: {e}")))?;
+    let content =
+        std::str::from_utf8(pem_data).map_err(|e| CertError::pem(format!("Invalid UTF-8: {e}")))?;
 
     // Find the base64 content between PEM headers
     let mut in_data = false;

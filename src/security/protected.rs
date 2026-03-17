@@ -2,6 +2,8 @@
 //!
 //! Uses secrecy to prevent accidental leakage of sensitive information.
 
+#![allow(dead_code)]
+
 use zeroize::Zeroize;
 
 /// A protected string that cannot be accidentally logged or copied.

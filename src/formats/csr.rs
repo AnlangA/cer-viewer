@@ -3,8 +3,11 @@
 //! This module handles CSR (also known as PKCS#10) formatted files,
 //! typically .csr or .p10 files, used to request certificate signing.
 
+#![allow(dead_code)]
+
 use crate::cert::{CertError, Result};
-use der::{Decode, Encode};
+#[allow(unused_imports)]
+use der::Decode;
 use std::fmt;
 
 /// Parsed CSR information.
@@ -109,13 +112,13 @@ impl ParsedCsr {
         // Subject is typically a RDNSequence in the certificationRequestInfo
         // Look for OID patterns that indicate subject fields (CN, O, OU, C, etc.)
         let subject_oids = [
-            (&[42, 134, 72, 134, 247, 13, 1, 1][..], "CN"),   // 2.5.4.3 commonName
-            (&[42, 134, 72, 134, 247, 13, 1, 2][..], "OU"),   // 2.5.4.11 organizationalUnitName
-            (&[42, 134, 72, 134, 247, 13, 1, 4][..], "O"),    // 2.5.4.10 organizationName
-            (&[42, 134, 72, 134, 247, 13, 1, 6][..], "C"),    // 2.5.4.6 countryName
-            (&[42, 134, 72, 134, 247, 13, 1, 7][..], "L"),    // 2.5.4.7 localityName
-            (&[42, 134, 72, 134, 247, 13, 1, 8][..], "ST"),   // 2.5.4.8 stateOrProvinceName
-            (&[42, 134, 72, 134, 247, 13, 1, 9][..], "ST"),   // 2.5.4.8 alternative
+            (&[42, 134, 72, 134, 247, 13, 1, 1][..], "CN"), // 2.5.4.3 commonName
+            (&[42, 134, 72, 134, 247, 13, 1, 2][..], "OU"), // 2.5.4.11 organizationalUnitName
+            (&[42, 134, 72, 134, 247, 13, 1, 4][..], "O"),  // 2.5.4.10 organizationName
+            (&[42, 134, 72, 134, 247, 13, 1, 6][..], "C"),  // 2.5.4.6 countryName
+            (&[42, 134, 72, 134, 247, 13, 1, 7][..], "L"),  // 2.5.4.7 localityName
+            (&[42, 134, 72, 134, 247, 13, 1, 8][..], "ST"), // 2.5.4.8 stateOrProvinceName
+            (&[42, 134, 72, 134, 247, 13, 1, 9][..], "ST"), // 2.5.4.8 alternative
         ];
 
         let mut parts = Vec::new();
@@ -330,9 +333,9 @@ MIIBWTCBwQIBADAMBggqgRzPVqEGMA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV
         ];
 
         // Verify the bytes we're looking for
-        assert_eq!(data[2], 42);  // 0x2A = 42
+        assert_eq!(data[2], 42); // 0x2A = 42
         assert_eq!(data[3], 134); // 0x86 = 134
-        assert_eq!(data[4], 72);  // 0x48 = 72
+        assert_eq!(data[4], 72); // 0x48 = 72
 
         // Test finding the OID pattern [42, 134, 72]
         let result = ParsedCsr::find_oid(&data, &[42, 134, 72]);

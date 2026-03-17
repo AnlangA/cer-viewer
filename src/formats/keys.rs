@@ -5,7 +5,9 @@
 //! - SEC1 (EC private keys)
 //! - RSA private keys (traditional PKCS#1)
 
-use crate::cert::{CertError, Result};
+#![allow(dead_code)]
+
+use crate::cert::Result;
 use der::Decode;
 use std::fmt;
 
@@ -117,7 +119,7 @@ impl ParsedPrivateKey {
     /// Detect key type from DER data.
     fn detect_key_type_from_der(data: &[u8]) -> Result<KeyType> {
         // Try PKCS#8 first - check for SEQUENCE tag at start
-        if data.len() > 0 && data[0] == 0x30 {
+        if !data.is_empty() && data[0] == 0x30 {
             // Try to parse as PKCS#8 PrivateKeyInfo
             // PKCS#8 starts with: SEQUENCE { version INTEGER, ... }
             if data.len() > 4 {
@@ -162,8 +164,12 @@ impl ParsedPrivateKey {
                     } else if Self::oid_starts_with(oid_bytes, &[42, 134, 72, 52]) {
                         // 1.2.840.10045.* - EC
                         return KeyType::Ec;
-                    } else if oid_bytes.len() > 4 && oid_bytes[0] == 42 && oid_bytes[1] == 134
-                        && oid_bytes[2] == 72 && oid_bytes[3] == 52 {
+                    } else if oid_bytes.len() > 4
+                        && oid_bytes[0] == 42
+                        && oid_bytes[1] == 134
+                        && oid_bytes[2] == 72
+                        && oid_bytes[3] == 52
+                    {
                         // Another EC OID variant
                         return KeyType::Ec;
                     }
@@ -357,6 +363,9 @@ MHcCAQEEINqKfCCOuALZGyXuMmKNLcVXcCBJGIcmFhBqXKPFymPoAoGCCqGSM49
             format: KeyFormat::Der,
         };
 
-        assert_eq!(encrypted_key.description(), "EC Private Key (secp256r1 (P-256)) (~256 bits) [ENCRYPTED]");
+        assert_eq!(
+            encrypted_key.description(),
+            "EC Private Key (secp256r1 (P-256)) (~256 bits) [ENCRYPTED]"
+        );
     }
 }

@@ -3,7 +3,9 @@
 //! This module provides utilities for detecting the format of certificate
 //! and key files from their content.
 
-use crate::formats::{pkcs12::is_pkcs12, cms::is_cms};
+#![allow(dead_code)]
+
+use crate::formats::{cms::is_cms, pkcs12::is_pkcs12};
 
 /// Detected file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +28,8 @@ pub fn detect_format(data: &[u8]) -> FileFormat {
     if data.starts_with(b"-----BEGIN") {
         // Further classify by content type
         let content = String::from_utf8_lossy(data);
-        if content.contains("PKCS12") || content.contains("PKCS-12") || content.contains("PKCS#12") {
+        if content.contains("PKCS12") || content.contains("PKCS-12") || content.contains("PKCS#12")
+        {
             return FileFormat::Pkcs12;
         }
         if content.contains("PKCS7") || content.contains("PKCS-7") || content.contains("PKCS#7") {
@@ -37,7 +40,7 @@ pub fn detect_format(data: &[u8]) -> FileFormat {
 
     // DER-encoded ASN.1 data starts with SEQUENCE tag (0x30)
     // PKCS#12 and CMS also start with a SEQUENCE, so we need to check
-    if data.len() > 0 && data[0] == 0x30 {
+    if !data.is_empty() && data[0] == 0x30 {
         // Try to detect PKCS#12 first
         if is_pkcs12(data) {
             return FileFormat::Pkcs12;

@@ -303,10 +303,7 @@ fn parse_sct_list(sct_list: &[SignedCertificateTimestamp], children: &mut Vec<Ce
     for (i, sct) in sct_list.iter().enumerate() {
         let mut sct_children = vec![
             CertField::leaf("Version", format!("v{}", sct.version.0 + 1)),
-            CertField::leaf(
-                "Log ID",
-                format_hex_block(&hex::encode(sct.id.key_id)),
-            ),
+            CertField::leaf("Log ID", format_hex_block(&hex::encode(sct.id.key_id))),
             CertField::leaf("Timestamp", format_sct_timestamp(sct.timestamp)),
         ];
 

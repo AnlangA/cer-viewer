@@ -1,5 +1,7 @@
 //! Certificate revocation checking.
 
+#![allow(dead_code)]
+
 /// Certificate revocation status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevocationStatus {

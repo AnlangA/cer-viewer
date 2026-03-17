@@ -4,16 +4,16 @@
 //! dark theme, and file-open dialog.
 
 mod cert;
+mod cli;
 mod theme;
 mod ui;
-mod cli;
 
 // New modular structure
-mod formats;
-mod validation;
-mod security;
 mod export;
+mod formats;
+mod security;
 mod utils;
+mod validation;
 
 use tracing::info;
 

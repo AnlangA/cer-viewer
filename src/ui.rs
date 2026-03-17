@@ -562,7 +562,7 @@ impl eframe::App for CertViewerApp {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("View:").color(theme::TEXT_LABEL));
                         let details_btn = egui::Button::new(
-                            RichText::new("Certificate Details").size(theme::FONT_BODY)
+                            RichText::new("Certificate Details").size(theme::FONT_BODY),
                         )
                         .corner_radius(CornerRadius::same(4))
                         .fill(if self.view_mode == ViewMode::Details {
@@ -574,15 +574,14 @@ impl eframe::App for CertViewerApp {
                             self.view_mode = ViewMode::Details;
                         }
 
-                        let chain_btn = egui::Button::new(
-                            RichText::new("Chain View").size(theme::FONT_BODY)
-                        )
-                        .corner_radius(CornerRadius::same(4))
-                        .fill(if self.view_mode == ViewMode::Chain {
-                            theme::ACCENT
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        });
+                        let chain_btn =
+                            egui::Button::new(RichText::new("Chain View").size(theme::FONT_BODY))
+                                .corner_radius(CornerRadius::same(4))
+                                .fill(if self.view_mode == ViewMode::Chain {
+                                    theme::ACCENT
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                });
                         if ui.add(chain_btn).clicked() {
                             self.view_mode = ViewMode::Chain;
                         }
@@ -724,7 +723,7 @@ where
 
 /// Draw certificate chain view.
 fn draw_chain(ui: &mut Ui, chain: &CertChain) {
-    use crate::cert::{ChainPosition, ChainValidationStatus};
+    use crate::cert::ChainValidationStatus;
 
     // Chain status header
     let (status_text, status_color) = match chain.validation_status {

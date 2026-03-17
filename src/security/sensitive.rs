@@ -59,10 +59,7 @@ pub fn is_potentially_sensitive(label: &str, value: Option<&str>) -> bool {
     // Check for long hex strings that might be key material
     // (e.g., 32+ bytes of hex without colons)
     if let Some(v) = value {
-        let hex_only: String = v
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .collect();
+        let hex_only: String = v.chars().filter(|c| c.is_ascii_hexdigit()).collect();
         if hex_only.len() >= 64 && !v.contains(':') && !v.contains(' ') {
             // Could be raw key material
             return true;
@@ -132,9 +129,15 @@ mod tests {
     #[test]
     fn test_detect_private_key() {
         assert!(is_potentially_sensitive("PRIVATE KEY", None));
-        assert!(is_potentially_sensitive("RSA PRIVATE KEY", Some("some data")));
+        assert!(is_potentially_sensitive(
+            "RSA PRIVATE KEY",
+            Some("some data")
+        ));
         assert!(is_potentially_sensitive("Private Key", Some("content")));
-        assert!(is_potentially_sensitive("-----BEGIN PRIVATE KEY-----", Some("...")));
+        assert!(is_potentially_sensitive(
+            "-----BEGIN PRIVATE KEY-----",
+            Some("...")
+        ));
     }
 
     #[test]
@@ -170,10 +173,7 @@ mod tests {
             SensitiveDataType::detect("API SECRET", None),
             Some(SensitiveDataType::Secret)
         );
-        assert_eq!(
-            SensitiveDataType::detect("Subject", Some("CN=test")),
-            None
-        );
+        assert_eq!(SensitiveDataType::detect("Subject", Some("CN=test")), None);
     }
 
     #[test]
@@ -186,10 +186,7 @@ mod tests {
     #[test]
     fn test_long_hex_detection() {
         // Short hex is not sensitive
-        assert!(!is_potentially_sensitive(
-            "Data",
-            Some("1a2b3c4d")
-        ));
+        assert!(!is_potentially_sensitive("Data", Some("1a2b3c4d")));
         // Long hex without separators might be key material
         assert!(is_potentially_sensitive(
             "Key Material",

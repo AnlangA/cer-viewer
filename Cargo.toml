@@ -9,12 +9,35 @@ repository = "https://github.com/your-org/cer-viewer"
 rust-version = "1.80"
 
 [dependencies]
+# UI framework
 eframe = "0.33.3"
 egui = "0.33.3"
+
+# Certificate parsing
 x509-parser = "0.18.1"
 pem = "3.0.6"
+
+# ASN.1 and DER parsing
+der = { version = "0.8", features = ["alloc", "oid"] }
+pkcs12 = { version = "0.2.0-pre.0" }
+# Note: cms is pre-release, will add when needed
+# cms = "0.3.0-pre.2"
+
+# Private key support
+sec1 = "0.8"
+spki = { version = "0.8.0-rc.4" }
+pkcs8 = { version = "0.11.0-rc.11" }
+# Note: rsa is pre-release
+# rsa = "0.10"
+
+# OCSP support
+# x509-ocsp = "0.2"
+
+# Logging and tracing
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "std"] }
+
+# Utilities
 hex = "0.4.3"
 chrono = "0.4.44"
 rfd = "0.17.2"
@@ -24,6 +47,14 @@ sha2 = "0.10.8"
 arboard = "3.4.1"
 thiserror = "2.0"
 base64 = "0.22"
+
+# Security - sensitive data protection
+zeroize = "1.8"
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Serialization (for future features)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 

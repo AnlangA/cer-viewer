@@ -5,19 +5,15 @@
 
 mod error;
 mod extensions;
+pub mod format;
 
 pub use error::{CertError, Result};
 
-use oid_registry::OidRegistry;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::sync::LazyLock;
 use x509_parser::prelude::*;
 
-// ── Global OID Registry (cached) ─────────────────────────────────────
-
-pub(crate) static OID_REGISTRY: LazyLock<OidRegistry<'static>> =
-    LazyLock::new(|| OidRegistry::default().with_all_crypto().with_x509());
+use crate::utils::{describe_oid, format_bytes_hex_colon as format_bytes_hex, format_hex_block};
 
 // ── Public data model ──────────────────────────────────────────────
 
@@ -340,35 +336,12 @@ fn build_cert_tree(cert: &X509Certificate<'_>, der_data: Vec<u8>) -> ParsedCert 
     }
 }
 
-/// Format raw bytes as a colon-separated uppercase hex string.
-pub(crate) fn format_bytes_hex(bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return String::new();
-    }
-    // Pre-allocate: each byte becomes "XX:" (3 chars), except last which is "XX" (2 chars)
-    let mut result = String::with_capacity(bytes.len() * 3 - 1);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 {
-            result.push(':');
-        }
-        push_hex_byte(&mut result, *b);
-    }
-    result
-}
-
-/// Push a single byte as uppercase hex to a string.
-fn push_hex_byte(s: &mut String, b: u8) {
-    const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-    s.push(HEX_CHARS[(b >> 4) as usize] as char);
-    s.push(HEX_CHARS[(b & 0x0F) as usize] as char);
-}
+// ── Helper formatters ──────────────────────────────────────────────
 
 /// Format a hash digest (implements `AsRef<[u8]>`) as a colon-separated uppercase hex string.
 pub(crate) fn format_digest_hex<D: AsRef<[u8]>>(digest: &D) -> String {
-    format_bytes_hex(digest.as_ref())
+    crate::utils::format_bytes_hex_colon(digest.as_ref())
 }
-
-// ── Helper formatters ──────────────────────────────────────────────
 
 fn extract_cn(name: &X509Name<'_>) -> Option<String> {
     for rdn in name.iter() {
@@ -379,28 +352,6 @@ fn extract_cn(name: &X509Name<'_>) -> Option<String> {
         }
     }
     None
-}
-
-pub(crate) fn format_hex_block(hex_str: &str) -> String {
-    hex_str
-        .as_bytes()
-        .chunks(2)
-        .map(|c| std::str::from_utf8(c).unwrap_or("??"))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
-pub(crate) fn describe_oid(oid: &oid_registry::Oid<'_>) -> String {
-    if let Some(entry) = OID_REGISTRY.get(oid) {
-        let name = entry.sn();
-        if name.is_empty() {
-            entry.description().to_string()
-        } else {
-            name.to_string()
-        }
-    } else {
-        format!("{oid}")
-    }
 }
 
 fn build_name_field(label: &str, name: &X509Name<'_>) -> CertField {

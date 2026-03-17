@@ -7,6 +7,13 @@ mod cert;
 mod theme;
 mod ui;
 
+// New modular structure
+mod formats;
+mod validation;
+mod security;
+mod export;
+mod utils;
+
 use tracing::info;
 
 fn main() -> eframe::Result<()> {

@@ -4,6 +4,7 @@
 //! plus helpers for drawing the certificate field tree.
 
 use crate::cert::{self, CertField, CertId, ParsedCert, ValidityStatus};
+use crate::security::{is_potentially_sensitive, sensitive_copy_warning, SensitiveDataType};
 use crate::theme;
 use egui::{
     CollapsingHeader, Context, CornerRadius, Frame, Id, Key, KeyboardShortcut, Margin, RichText,
@@ -276,13 +277,30 @@ impl CertViewerApp {
     }
 
     /// Copy text to clipboard using cached clipboard instance.
+    ///
+    /// This method checks if the text being copied contains sensitive data
+    /// and logs a warning if it does.
     fn copy_to_clipboard(&mut self, text: String) {
+        // Check for sensitive data before copying
+        let data_type = SensitiveDataType::detect("clipboard", Some(&text));
+        let is_sensitive = data_type.is_some();
+
         // Try cached instance first
         if let Some(clipboard) = &mut self.clipboard {
             match clipboard.set_text(&text) {
                 Ok(()) => {
-                    self.show_info("Copied to clipboard".to_string());
-                    info!("Copied to clipboard: {} chars", text.len());
+                    if is_sensitive {
+                        let warning = sensitive_copy_warning(data_type.unwrap().description());
+                        self.show_info(warning);
+                        warn!(
+                            "Copied sensitive data to clipboard: {} chars, type: {:?}",
+                            text.len(),
+                            data_type
+                        );
+                    } else {
+                        self.show_info("Copied to clipboard".to_string());
+                        info!("Copied to clipboard: {} chars", text.len());
+                    }
                     return;
                 }
                 Err(e) => {
@@ -296,8 +314,18 @@ impl CertViewerApp {
             Ok(mut clipboard) => match clipboard.set_text(&text) {
                 Ok(()) => {
                     self.clipboard = Some(clipboard);
-                    self.show_info("Copied to clipboard".to_string());
-                    info!("Copied to clipboard: {} chars", text.len());
+                    if is_sensitive {
+                        let warning = sensitive_copy_warning(data_type.unwrap().description());
+                        self.show_info(warning);
+                        warn!(
+                            "Copied sensitive data to clipboard: {} chars, type: {:?}",
+                            text.len(),
+                            data_type
+                        );
+                    } else {
+                        self.show_info("Copied to clipboard".to_string());
+                        info!("Copied to clipboard: {} chars", text.len());
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to copy to clipboard: {}", e);
@@ -751,6 +779,17 @@ where
                 );
 
                 response.context_menu(|ui| {
+                    let is_sensitive = is_potentially_sensitive(&field.label, Some(val));
+
+                    if is_sensitive {
+                        ui.label(
+                            RichText::new("⚠️ Sensitive data")
+                                .color(egui::Color32::YELLOW)
+                                .italics(),
+                        );
+                        ui.separator();
+                    }
+
                     if ui.button("Copy value").clicked() {
                         on_copy(val.clone());
                         ui.close();

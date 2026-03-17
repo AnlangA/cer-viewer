@@ -81,4 +81,10 @@ impl CertError {
     pub fn unsupported(format: impl Into<String>) -> Self {
         Self::UnsupportedFormat(format.into())
     }
+
+    /// Create a general parse error.
+    #[expect(dead_code)]
+    pub fn parse(msg: impl Into<String>) -> Self {
+        Self::PemParse(msg.into())
+    }
 }

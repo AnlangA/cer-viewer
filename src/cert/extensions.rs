@@ -3,7 +3,8 @@
 //! This module handles parsing of X.509 certificate extensions into
 //! displayable field trees.
 
-use super::{describe_oid, CertField};
+use super::CertField;
+use crate::utils::{describe_oid, format_hex_block};
 use x509_parser::extensions::{
     AuthorityInfoAccess, AuthorityKeyIdentifier, BasicConstraints, CRLDistributionPoint,
     DistributionPointName, ExtendedKeyUsage, InhibitAnyPolicy, IssuerAlternativeName,
@@ -99,14 +100,14 @@ pub fn build_extension_field(ext: &X509Extension<'_>) -> CertField {
         ParsedExtension::UnsupportedExtension { .. } => {
             children.push(CertField::leaf(
                 "Raw Value",
-                super::format_hex_block(&hex::encode(ext.value)),
+                format_hex_block(&hex::encode(ext.value)),
             ));
         }
         // Handle all other extensions with raw value display
         other => {
             children.push(CertField::leaf(
                 "Raw Value",
-                super::format_hex_block(&hex::encode(ext.value)),
+                format_hex_block(&hex::encode(ext.value)),
             ));
             children.push(CertField::leaf("Type", format!("{other:?}")));
         }
@@ -129,7 +130,7 @@ fn parse_san(san: &SubjectAlternativeName<'_>, children: &mut Vec<CertField>) {
 fn parse_ski(kid: &KeyIdentifier<'_>, children: &mut Vec<CertField>) {
     children.push(CertField::leaf(
         "Key Identifier",
-        super::format_hex_block(&hex::encode(kid.0)),
+        format_hex_block(&hex::encode(kid.0)),
     ));
 }
 
@@ -137,7 +138,7 @@ fn parse_aki(aki: &AuthorityKeyIdentifier<'_>, children: &mut Vec<CertField>) {
     if let Some(kid) = &aki.key_identifier {
         children.push(CertField::leaf(
             "Key Identifier",
-            super::format_hex_block(&hex::encode(kid.0)),
+            format_hex_block(&hex::encode(kid.0)),
         ));
     }
     if let Some(issuer) = &aki.authority_cert_issuer {
@@ -149,7 +150,7 @@ fn parse_aki(aki: &AuthorityKeyIdentifier<'_>, children: &mut Vec<CertField>) {
     if let Some(serial) = &aki.authority_cert_serial {
         children.push(CertField::leaf(
             "Authority Cert Serial Number",
-            super::format_hex_block(&hex::encode(serial)),
+            format_hex_block(&hex::encode(serial)),
         ));
     }
 }
@@ -283,7 +284,7 @@ fn parse_certificate_policies(policies: &[PolicyInformation], children: &mut Vec
                             .filter(|c| c.is_ascii_graphic() || *c == ' ')
                             .collect::<String>()
                     } else {
-                        super::format_hex_block(&hex::encode(q.qualifier))
+                        format_hex_block(&hex::encode(q.qualifier))
                     };
                     CertField::leaf(format!("Qualifier {} ({})", j + 1, qid), value)
                 })
@@ -304,7 +305,7 @@ fn parse_sct_list(sct_list: &[SignedCertificateTimestamp], children: &mut Vec<Ce
             CertField::leaf("Version", format!("v{}", sct.version.0 + 1)),
             CertField::leaf(
                 "Log ID",
-                super::format_hex_block(&hex::encode(sct.id.key_id)),
+                format_hex_block(&hex::encode(sct.id.key_id)),
             ),
             CertField::leaf("Timestamp", format_sct_timestamp(sct.timestamp)),
         ];
@@ -313,7 +314,7 @@ fn parse_sct_list(sct_list: &[SignedCertificateTimestamp], children: &mut Vec<Ce
         if !sct.extensions.0.is_empty() {
             sct_children.push(CertField::leaf(
                 "Extensions",
-                super::format_hex_block(&hex::encode(sct.extensions.0)),
+                format_hex_block(&hex::encode(sct.extensions.0)),
             ));
         }
 
@@ -323,7 +324,7 @@ fn parse_sct_list(sct_list: &[SignedCertificateTimestamp], children: &mut Vec<Ce
         sct_children.push(CertField::leaf("Signature Algorithm", sig_alg));
         sct_children.push(CertField::leaf(
             "Signature Value",
-            super::format_hex_block(&hex::encode(sct.signature.data)),
+            format_hex_block(&hex::encode(sct.signature.data)),
         ));
 
         children.push(CertField::container(format!("SCT {}", i + 1), sct_children));

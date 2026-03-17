@@ -1,11 +1,10 @@
 //! Export and conversion utilities for certificates and keys.
 
-#![allow(dead_code)]
-
 use crate::cert::{CertError, Result};
 use base64::prelude::*;
 
 /// Export data as PEM format.
+#[allow(dead_code)] // Public API utility
 pub fn to_pem(label: &str, data: &[u8]) -> String {
     let b64 = BASE64_STANDARD.encode(data);
     let mut pem = String::with_capacity(b64.len() + 64);
@@ -28,23 +27,36 @@ pub fn to_pem(label: &str, data: &[u8]) -> String {
 }
 
 /// Export data as DER format (just returns the bytes).
+#[allow(dead_code)] // Public API utility
 pub fn to_der(data: &[u8]) -> Vec<u8> {
     data.to_vec()
 }
 
 /// Convert PEM to DER (extract base64 content).
 pub fn pem_to_der(pem_data: &[u8]) -> Result<Vec<u8>> {
-    let content =
-        std::str::from_utf8(pem_data).map_err(|e| CertError::pem(format!("Invalid UTF-8: {e}")))?;
+    let content = std::str::from_utf8(pem_data).map_err(|e| {
+        CertError::pem(format!(
+            "Invalid UTF-8 in PEM data: {e}. \
+            PEM files must be valid UTF-8 text."
+        ))
+    })?;
 
     // Find the base64 content between PEM headers
     let mut in_data = false;
     let mut base64_content = String::new();
+    let mut begin_label = None::<String>;
 
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("-----BEGIN") {
             in_data = true;
+            begin_label = Some(
+                trimmed
+                    .strip_prefix("-----BEGIN ")
+                    .and_then(|s| s.strip_suffix("-----"))
+                    .unwrap_or("UNKNOWN")
+                    .to_string(),
+            );
             continue;
         }
         if trimmed.starts_with("-----END") {
@@ -56,7 +68,14 @@ pub fn pem_to_der(pem_data: &[u8]) -> Result<Vec<u8>> {
     }
 
     if base64_content.is_empty() {
-        return Err(CertError::pem("No PEM content found"));
+        let label_info = begin_label
+            .as_ref()
+            .map(|l| format!(" for '{l}'"))
+            .unwrap_or_default();
+        return Err(CertError::pem(format!(
+            "No PEM content found{label_info}. \
+            Ensure the file contains valid PEM data with BEGIN/END markers."
+        )));
     }
 
     BASE64_STANDARD

@@ -27,14 +27,16 @@ pem = "3.0.6"
 
 # ASN.1 and DER parsing
 der = { version = "0.8", features = ["alloc", "oid"] }
-pkcs12 = { version = "0.2.0-pre.0" }
-# Note: cms is pre-release, will add when needed
-# cms = "0.3.0-pre.2"
+# NOTE: pkcs12 is pre-release (0.2.0-pre.0) - required for PKCS#12 and CMS parsing
+# These crates are from RustCrypto project and are actively developed.
+# Update to stable versions when available.
+pkcs12 = { version = "0.2.0-pre.0", optional = true }
 
 # Private key support
-sec1 = "0.8"
-spki = { version = "0.8.0-rc.4" }
-pkcs8 = { version = "0.11.0-rc.11" }
+# NOTE: spki and pkcs8 are release candidates - update to stable when available
+sec1 = { version = "0.8", optional = true }
+spki = { version = "0.8.0-rc.4", optional = true }
+pkcs8 = { version = "0.11.0-rc.11", optional = true }
 # Note: rsa is pre-release
 # rsa = "0.10"
 
@@ -70,8 +72,15 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [features]
-default = []
+default = ["pkcs12", "private-keys"]
+# Enable network operations (OCSP/CRL)
 network = ["reqwest", "tokio"]
+# Enable PKCS#12 and CMS (PKCS#7) parsing
+pkcs12 = ["dep:pkcs12"]
+# Enable private key parsing support
+private-keys = ["dep:sec1", "dep:spki", "dep:pkcs8"]
+# Full format support (enables all optional features)
+full-formats = ["pkcs12", "private-keys"]
 
 [dev-dependencies]
 

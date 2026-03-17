@@ -88,13 +88,13 @@ impl ParsedPrivateKey {
     /// # Arguments
     /// * `pem_data` - The PEM-encoded private key data
     pub fn from_pem(pem_data: &[u8]) -> Result<Self> {
-        let content = String::from_utf8_lossy(pem_data);
-
-        // Check for various PEM headers
-        let is_encrypted = content.contains("ENCRYPTED");
-        let is_rsa = content.contains("-----BEGIN RSA PRIVATE KEY-----");
-        let is_ec = content.contains("-----BEGIN EC PRIVATE KEY-----")
-            || content.contains("-----BEGIN EC PARAMETERS-----");
+        // Check for various PEM headers (using byte comparison to avoid allocation)
+        let is_encrypted = crate::utils::bytes_contains(pem_data, "ENCRYPTED");
+        let is_rsa = crate::utils::bytes_contains(pem_data, "-----BEGIN RSA PRIVATE KEY-----");
+        let is_ec = crate::utils::bytes_contains_any(
+            pem_data,
+            &["-----BEGIN EC PRIVATE KEY-----", "-----BEGIN EC PARAMETERS-----"],
+        );
 
         // Extract DER from PEM
         let der_data = Self::extract_der_from_pem(pem_data)?;
@@ -249,28 +249,28 @@ impl fmt::Display for ParsedPrivateKey {
 
 /// Detect if data is a PEM-encoded private key.
 pub fn is_pem_private_key(data: &[u8]) -> bool {
-    let content = String::from_utf8_lossy(data);
-    content.contains("PRIVATE KEY")
+    crate::utils::bytes_contains(data, "PRIVATE KEY")
 }
 
 /// Detect if data is a PKCS#8 private key.
 pub fn is_pkcs8_private_key(data: &[u8]) -> bool {
-    let content = String::from_utf8_lossy(data);
-    content.contains("-----BEGIN PRIVATE KEY-----")
-        || content.contains("-----BEGIN ENCRYPTED PRIVATE KEY-----")
+    crate::utils::bytes_contains_any(
+        data,
+        &["-----BEGIN PRIVATE KEY-----", "-----BEGIN ENCRYPTED PRIVATE KEY-----"],
+    )
 }
 
 /// Detect if data is an RSA private key (traditional format).
 pub fn is_rsa_private_key(data: &[u8]) -> bool {
-    let content = String::from_utf8_lossy(data);
-    content.contains("-----BEGIN RSA PRIVATE KEY-----")
+    crate::utils::bytes_contains(data, "-----BEGIN RSA PRIVATE KEY-----")
 }
 
 /// Detect if data is an EC private key.
 pub fn is_ec_private_key(data: &[u8]) -> bool {
-    let content = String::from_utf8_lossy(data);
-    content.contains("-----BEGIN EC PRIVATE KEY-----")
-        || content.contains("-----BEGIN EC PARAMETERS-----")
+    crate::utils::bytes_contains_any(
+        data,
+        &["-----BEGIN EC PRIVATE KEY-----", "-----BEGIN EC PARAMETERS-----"],
+    )
 }
 
 #[cfg(test)]

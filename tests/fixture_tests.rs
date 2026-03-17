@@ -250,7 +250,7 @@ fn test_all_fixture_certificates_parseable() {
 
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if !path.extension().map_or(false, |e| e == "crt") {
+            if !path.extension().is_some_and(|e| e == "crt") {
                 continue;
             }
 

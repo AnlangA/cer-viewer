@@ -4,8 +4,6 @@
 //! showing the hierarchical relationship from leaf certificate through
 //! intermediates to the root CA.
 
-#![allow(dead_code)]
-
 use crate::cert::{ParsedCert, ValidityStatus};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -233,6 +231,7 @@ impl CertChain {
     }
 
     /// Get the chain as a tree of fields for UI display.
+    #[allow(dead_code)] // Used in tests and reserved for future UI features
     pub fn to_field_tree(&self) -> crate::cert::CertField {
         let mut children = Vec::new();
 
@@ -289,6 +288,7 @@ impl CertChain {
     }
 }
 
+#[allow(dead_code)] // Used by to_field_tree
 fn validity_status_text(status: ValidityStatus) -> &'static str {
     match status {
         ValidityStatus::Valid => "Valid",

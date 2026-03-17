@@ -1,10 +1,9 @@
 //! Time and date utilities for certificate validity.
 
-#![allow(dead_code)]
-
 use chrono::{DateTime, Utc};
 
 /// Format an ASN.1 time as a human-readable string.
+#[allow(dead_code)] // Public API utility
 pub fn format_asn1_time_utc(timestamp: i64) -> String {
     DateTime::from_timestamp(timestamp, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
@@ -12,6 +11,7 @@ pub fn format_asn1_time_utc(timestamp: i64) -> String {
 }
 
 /// Format a duration in human-readable form.
+#[allow(dead_code)] // Public API utility
 pub fn format_duration(seconds: i64) -> String {
     const SECONDS_PER_MINUTE: i64 = 60;
     const SECONDS_PER_HOUR: i64 = 60 * SECONDS_PER_MINUTE;
@@ -29,6 +29,7 @@ pub fn format_duration(seconds: i64) -> String {
 }
 
 /// Get the current Unix timestamp.
+#[allow(dead_code)] // Public API utility
 pub fn now_timestamp() -> i64 {
     Utc::now().timestamp()
 }

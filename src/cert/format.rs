@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use crate::formats::{cms::is_cms, pkcs12::is_pkcs12};
+use crate::utils;
 
 /// Detected file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,13 +26,11 @@ pub enum FileFormat {
 pub fn detect_format(data: &[u8]) -> FileFormat {
     // Check for PEM format (starts with -----BEGIN)
     if data.starts_with(b"-----BEGIN") {
-        // Further classify by content type
-        let content = String::from_utf8_lossy(data);
-        if content.contains("PKCS12") || content.contains("PKCS-12") || content.contains("PKCS#12")
-        {
+        // Further classify by content type (using byte comparison to avoid allocation)
+        if utils::bytes_contains_any(data, &["PKCS12", "PKCS-12", "PKCS#12"]) {
             return FileFormat::Pkcs12;
         }
-        if content.contains("PKCS7") || content.contains("PKCS-7") || content.contains("PKCS#7") {
+        if utils::bytes_contains_any(data, &["PKCS7", "PKCS-7", "PKCS#7"]) {
             return FileFormat::Cms;
         }
         return FileFormat::Pem;
@@ -41,13 +39,16 @@ pub fn detect_format(data: &[u8]) -> FileFormat {
     // DER-encoded ASN.1 data starts with SEQUENCE tag (0x30)
     // PKCS#12 and CMS also start with a SEQUENCE, so we need to check
     if !data.is_empty() && data[0] == 0x30 {
-        // Try to detect PKCS#12 first
-        if is_pkcs12(data) {
-            return FileFormat::Pkcs12;
-        }
-        // Try to detect CMS
-        if is_cms(data) {
-            return FileFormat::Cms;
+        #[cfg(feature = "pkcs12")]
+        {
+            // Try to detect PKCS#12 first
+            if crate::formats::pkcs12::is_pkcs12(data) {
+                return FileFormat::Pkcs12;
+            }
+            // Try to detect CMS
+            if crate::formats::cms::is_cms(data) {
+                return FileFormat::Cms;
+            }
         }
         return FileFormat::Der;
     }
@@ -57,24 +58,28 @@ pub fn detect_format(data: &[u8]) -> FileFormat {
 
 /// Check if data looks like a PEM-encoded certificate.
 pub fn is_pem_certificate(data: &[u8]) -> bool {
-    let content = String::from_utf8_lossy(data);
-    content.contains("-----BEGIN CERTIFICATE-----")
+    utils::bytes_contains(data, "-----BEGIN CERTIFICATE-----")
 }
 
 /// Check if data looks like a PEM-encoded private key.
 pub fn is_pem_private_key(data: &[u8]) -> bool {
-    let content = String::from_utf8_lossy(data);
-    content.contains("-----BEGIN PRIVATE KEY-----")
-        || content.contains("-----BEGIN RSA PRIVATE KEY-----")
-        || content.contains("-----BEGIN EC PRIVATE KEY-----")
-        || content.contains("-----BEGIN EC PARAMETERS-----")
+    utils::bytes_contains_any(
+        data,
+        &[
+            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "-----BEGIN EC PRIVATE KEY-----",
+            "-----BEGIN EC PARAMETERS-----",
+        ],
+    )
 }
 
 /// Check if data looks like a PEM-encoded PKCS#8 key.
 pub fn is_pem_pkcs8_key(data: &[u8]) -> bool {
-    let content = String::from_utf8_lossy(data);
-    content.contains("-----BEGIN PRIVATE KEY-----")
-        || content.contains("-----BEGIN ENCRYPTED PRIVATE KEY-----")
+    utils::bytes_contains_any(
+        data,
+        &["-----BEGIN PRIVATE KEY-----", "-----BEGIN ENCRYPTED PRIVATE KEY-----"],
+    )
 }
 
 #[cfg(test)]

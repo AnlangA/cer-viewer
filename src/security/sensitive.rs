@@ -6,61 +6,72 @@
 use std::sync::LazyLock;
 
 /// Patterns that indicate sensitive data.
-static SENSITIVE_PATTERNS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+/// Using lowercase for efficient ASCII case-insensitive comparison.
+static SENSITIVE_PATTERNS: LazyLock<Vec<&'static [u8]>> = LazyLock::new(|| {
     vec![
-        // Private key indicators
-        "PRIVATE KEY",
-        "PRIVATE KEY-",
-        "RSA PRIVATE KEY",
-        "EC PRIVATE KEY",
-        "DSA PRIVATE KEY",
-        "OPENSSH PRIVATE KEY",
-        "ENCRYPTED PRIVATE KEY",
+        // Private key indicators (lowercase for case-insensitive match)
+        b"private key",
+        b"private-key",
+        b"rsa private key",
+        b"ec private key",
+        b"dsa private key",
+        b"openssh private key",
+        b"encrypted private key",
         // PKCS#8
-        "PKCS#8",
-        "PKCS8",
+        b"pkcs#8",
+        b"pkcs8",
         // Password/passphrase indicators
-        "PASSWORD",
-        "PASSPHRASE",
-        "SECRET",
-        // Sensitive field labels
-        "Private Key",
-        "Private-Key",
-        "private_key",
-        "private-key",
+        b"password",
+        b"passphrase",
+        b"secret",
         // Key material
-        "KEY MATERIAL",
-        "KEY MATERIAL-",
+        b"key material",
         // Certificate signing request private part
-        "CSR PRIVATE",
+        b"csr private",
     ]
 });
+
+/// Helper function to check if a byte slice contains a pattern (case-insensitive for ASCII).
+fn contains_pattern_ascii_case_insensitive(data: &[u8], pattern: &[u8]) -> bool {
+    if pattern.is_empty() || data.is_empty() {
+        return false;
+    }
+    if data.len() < pattern.len() {
+        return false;
+    }
+
+    data.windows(pattern.len()).any(|window| {
+        window.iter().zip(pattern.iter()).all(|(a, b)| {
+            a.eq_ignore_ascii_case(b)
+        })
+    })
+}
 
 /// Check if a label or value potentially contains sensitive data.
 ///
 /// Returns `true` if the input matches any known sensitive pattern.
 /// This is a heuristic check - when in doubt, it returns `true` to be safe.
 pub fn is_potentially_sensitive(label: &str, value: Option<&str>) -> bool {
-    let combined = if let Some(v) = value {
-        format!("{} {}", label, v)
-    } else {
-        label.to_string()
-    };
-
-    let combined_upper = combined.to_uppercase();
-
-    // Check against known patterns
+    // Check label against patterns (case-insensitive)
+    let label_bytes = label.as_bytes();
     for pattern in SENSITIVE_PATTERNS.iter() {
-        if combined_upper.contains(pattern) {
+        if contains_pattern_ascii_case_insensitive(label_bytes, pattern) {
             return true;
         }
     }
 
-    // Check for long hex strings that might be key material
-    // (e.g., 32+ bytes of hex without colons)
     if let Some(v) = value {
-        let hex_only: String = v.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        if hex_only.len() >= 64 && !v.contains(':') && !v.contains(' ') {
+        let value_bytes = v.as_bytes();
+        for pattern in SENSITIVE_PATTERNS.iter() {
+            if contains_pattern_ascii_case_insensitive(value_bytes, pattern) {
+                return true;
+            }
+        }
+
+        // Check for long hex strings that might be key material
+        // (e.g., 32+ bytes of hex without colons)
+        let hex_count = v.bytes().filter(|b| b.is_ascii_hexdigit()).count();
+        if hex_count >= 64 && !v.contains(':') && !v.contains(' ') {
             // Could be raw key material
             return true;
         }
@@ -98,13 +109,32 @@ impl SensitiveDataType {
             return None;
         }
 
-        let combined = format!("{} {}", label, value.unwrap_or("")).to_uppercase();
+        // Use case-insensitive ASCII comparison without allocation
+        let label_lower = label.to_ascii_lowercase();
+        let value_lower = value.map(|v| v.to_ascii_lowercase());
 
-        if combined.contains("PRIVATE KEY") || combined.contains("PRIVATE-KEY") {
+        let has_private_key = label_lower.contains("private key")
+            || label_lower.contains("private-key")
+            || value_lower
+                .as_ref()
+                .map(|v| v.contains("private key") || v.contains("private-key"))
+                .unwrap_or(false);
+
+        let has_password = label_lower.contains("password")
+            || label_lower.contains("passphrase")
+            || value_lower
+                .as_ref()
+                .map(|v| v.contains("password") || v.contains("passphrase"))
+                .unwrap_or(false);
+
+        let has_secret = label_lower.contains("secret")
+            || value_lower.as_ref().map(|v| v.contains("secret")).unwrap_or(false);
+
+        if has_private_key {
             Some(Self::PrivateKey)
-        } else if combined.contains("PASSWORD") || combined.contains("PASSPHRASE") {
+        } else if has_password {
             Some(Self::Password)
-        } else if combined.contains("SECRET") {
+        } else if has_secret {
             Some(Self::Secret)
         } else {
             Some(Self::Unknown)

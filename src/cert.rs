@@ -362,8 +362,8 @@ fn build_name_field(label: &str, name: &X509Name<'_>) -> CertField {
     for rdn in name.iter() {
         for attr in rdn.iter() {
             let oid_desc = describe_oid(attr.attr_type());
-            let val = attr.as_str().unwrap_or("(binary)").to_string();
-            children.push(CertField::leaf(&oid_desc, &val));
+            let val = attr.as_str().unwrap_or("(binary)");
+            children.push(CertField::leaf(&oid_desc, val));
         }
     }
     let summary = name.to_string();
@@ -386,13 +386,20 @@ fn format_asn1_time(t: &ASN1Time) -> String {
     let ts = t.timestamp();
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("timestamp {ts}"))
+        .unwrap_or_else(|| {
+            // Use a more efficient error message
+            let mut result = String::from("timestamp ");
+            result.push_str(&ts.to_string());
+            result
+        })
 }
 
 fn build_spki_field(spki: &SubjectPublicKeyInfo<'_>) -> CertField {
     let algo = describe_oid(&spki.algorithm.algorithm);
-    let key_hex = hex::encode(&*spki.subject_public_key.data);
-    let key_bits = spki.subject_public_key.data.len() * 8;
+    let key_data = &*spki.subject_public_key.data;
+    let key_bits = key_data.len() * 8;
+    // Use a pre-formatted hex string with colons directly
+    let key_hex = format_bytes_hex(key_data);
     CertField::container(
         "Subject Public Key Info",
         vec![

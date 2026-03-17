@@ -9,7 +9,7 @@ pub type Result<T> = std::result::Result<T, CertError>;
 
 /// Errors that can occur in the certificate viewer.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // Error variants kept for future use
+#[allow(dead_code)] // Some error variants are reserved for future use
 pub enum CertError {
     /// Failed to parse PEM-encoded data.
     #[error("PEM parse error: {0}")]
@@ -55,35 +55,7 @@ impl CertError {
         Self::DerParse(msg.into())
     }
 
-    /// Create a file read error.
-    #[allow(dead_code)]
-    pub fn file_read(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Self::FileRead {
-            path: path.into(),
-            source,
-        }
-    }
-
-    /// Create a clipboard error.
-    #[allow(dead_code)]
-    pub fn clipboard(msg: impl Into<String>) -> Self {
-        Self::Clipboard(msg.into())
-    }
-
-    /// Create a validation error.
-    #[allow(dead_code)]
-    pub fn validation(msg: impl Into<String>) -> Self {
-        Self::Validation(msg.into())
-    }
-
-    /// Create an unsupported format error.
-    #[allow(dead_code)]
-    pub fn unsupported(format: impl Into<String>) -> Self {
-        Self::UnsupportedFormat(format.into())
-    }
-
     /// Create a general parse error.
-    #[allow(dead_code)]
     pub fn parse(msg: impl Into<String>) -> Self {
         Self::PemParse(msg.into())
     }

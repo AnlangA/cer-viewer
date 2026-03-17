@@ -1,7 +1,5 @@
 //! Base64 encoding/decoding utilities.
 
-#![allow(dead_code)]
-
 use crate::cert::Result;
 use base64::prelude::*;
 
@@ -11,39 +9,54 @@ pub fn format_bytes_hex_colon(bytes: &[u8]) -> String {
         return String::new();
     }
 
+    const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
     let mut result = String::with_capacity(bytes.len() * 3 - 1);
-    for (i, b) in bytes.iter().enumerate() {
+
+    for (i, &b) in bytes.iter().enumerate() {
         if i > 0 {
             result.push(':');
         }
-        push_hex_byte(&mut result, *b);
+        // Inline hex encoding for better performance
+        result.push(HEX_CHARS[(b >> 4) as usize] as char);
+        result.push(HEX_CHARS[(b & 0x0F) as usize] as char);
     }
     result
 }
 
 /// Encode bytes as continuous hex string.
+#[allow(dead_code)] // Public API utility
 pub fn format_bytes_hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
 }
 
 /// Format a hex string with colons (e.g., "AA:BB:CC").
+///
+/// This avoids intermediate allocations by pre-calculating the capacity
+/// and using direct byte manipulation.
 pub fn format_hex_block(hex_str: &str) -> String {
-    hex_str
-        .as_bytes()
-        .chunks(2)
-        .map(|c| std::str::from_utf8(c).unwrap_or("??"))
-        .collect::<Vec<_>>()
-        .join(":")
-}
+    let bytes = hex_str.as_bytes();
+    if bytes.len() < 2 {
+        return hex_str.to_string();
+    }
 
-/// Push a single byte as uppercase hex to a string.
-fn push_hex_byte(s: &mut String, b: u8) {
-    const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-    s.push(HEX_CHARS[(b >> 4) as usize] as char);
-    s.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+    let chunk_count = bytes.len().div_ceil(2);
+    let mut result = String::with_capacity(bytes.len() + chunk_count - 1);
+
+    for (i, chunk) in bytes.chunks(2).enumerate() {
+        if i > 0 {
+            result.push(':');
+        }
+        // Direct byte push is faster than push_str for small chunks
+        result.push(chunk[0] as char);
+        if chunk.len() == 2 {
+            result.push(chunk[1] as char);
+        }
+    }
+    result
 }
 
 /// Decode base64 data.
+#[allow(dead_code)] // Public API utility
 pub fn decode_base64(data: &str) -> Result<Vec<u8>> {
     BASE64_STANDARD
         .decode(data)
@@ -51,6 +64,7 @@ pub fn decode_base64(data: &str) -> Result<Vec<u8>> {
 }
 
 /// Encode data as base64.
+#[allow(dead_code)] // Public API utility
 pub fn encode_base64(data: &[u8]) -> String {
     BASE64_STANDARD.encode(data)
 }

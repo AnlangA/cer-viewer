@@ -5,20 +5,23 @@
 
 mod error;
 mod extensions;
+mod chain;
 pub mod format;
 
 pub use error::{CertError, Result};
+pub use chain::{CertChain, ChainCert, ChainPosition, ChainValidationStatus};
 
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use x509_parser::prelude::*;
+use serde::Serialize;
 
 use crate::utils::{describe_oid, format_bytes_hex_colon as format_bytes_hex, format_hex_block};
 
 // ── Public data model ──────────────────────────────────────────────
 
 /// A single node in the certificate field tree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CertField {
     /// Human-readable label for this field (e.g. "Subject", "Serial Number").
     pub label: String,
@@ -72,7 +75,7 @@ impl CertField {
 // ── Validity status ─────────────────────────────────────────────────
 
 /// Certificate validity status relative to the current time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ValidityStatus {
     /// Certificate is currently valid (notBefore ≤ now ≤ notAfter).
     Valid,
@@ -105,8 +108,8 @@ impl ValidityStatus {
 ///
 /// Based on SHA-256 fingerprint of the DER-encoded certificate data.
 /// This provides a stable identifier that can be used for duplicate detection.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CertId(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct CertId(pub String);
 
 impl CertId {
     /// Create a CertId from raw DER data.
@@ -126,7 +129,7 @@ impl std::fmt::Display for CertId {
 /// This structure contains all parsed certificate data in a format suitable
 /// for UI display. The `fields` vector contains the hierarchical representation
 /// of certificate elements.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[expect(dead_code)] // Fields are kept for future features (export, search, etc.)
 pub struct ParsedCert {
     /// Unique identifier for this certificate (SHA-256 based).

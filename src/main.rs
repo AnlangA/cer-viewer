@@ -6,6 +6,7 @@
 mod cert;
 mod theme;
 mod ui;
+mod cli;
 
 // New modular structure
 mod formats;
@@ -22,6 +23,21 @@ fn main() -> eframe::Result<()> {
         .with_target(false)
         .with_level(true)
         .init();
+
+    // Check if CLI mode is requested
+    match cli::run() {
+        Ok(true) => {
+            // CLI mode was executed, exit
+            return Ok(());
+        }
+        Ok(false) => {
+            // No CLI args, continue to GUI
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
 
     info!("Starting cer-viewer");
 

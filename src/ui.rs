@@ -3,7 +3,7 @@
 //! Contains the [`CertViewerApp`] struct that implements [`eframe::App`],
 //! plus helpers for drawing the certificate field tree.
 
-use crate::cert::{self, CertField, CertId, ParsedCert, ValidityStatus};
+use crate::cert::{self, CertChain, CertField, CertId, ParsedCert, ValidityStatus};
 use crate::security::{is_potentially_sensitive, sensitive_copy_warning, SensitiveDataType};
 use crate::theme;
 use egui::{
@@ -31,6 +31,15 @@ enum TabAction {
     Close(usize),
 }
 
+/// View mode for certificate display.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    /// Show single certificate details.
+    Details,
+    /// Show certificate chain.
+    Chain,
+}
+
 // ── Application state ──────────────────────────────────────────────
 
 /// Main application state for the certificate viewer.
@@ -41,6 +50,8 @@ pub struct CertViewerApp {
     cert_index: HashMap<CertId, usize>,
     /// Index of the selected certificate tab.
     selected_tab: usize,
+    /// Current view mode (details or chain).
+    view_mode: ViewMode,
     /// Error messages to display (collected from all file operations).
     error_msgs: Vec<String>,
     /// Info message to display, if any.
@@ -68,6 +79,7 @@ impl CertViewerApp {
             certs: Vec::new(),
             cert_index: HashMap::new(),
             selected_tab: 0,
+            view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
@@ -545,15 +557,55 @@ impl eframe::App for CertViewerApp {
 
                 if self.certs.is_empty() {
                     draw_empty_state(ui);
-                } else if let Some(cert) = self.certs.get(self.selected_tab) {
-                    let mut to_copy: Option<String> = None;
-                    draw_certificate(ui, cert, &mut |text| {
-                        to_copy = Some(text);
-                    });
+                } else {
+                    // View mode switcher
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("View:").color(theme::TEXT_LABEL));
+                        let details_btn = egui::Button::new(
+                            RichText::new("Certificate Details").size(theme::FONT_BODY)
+                        )
+                        .corner_radius(CornerRadius::same(4))
+                        .fill(if self.view_mode == ViewMode::Details {
+                            theme::ACCENT
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        });
+                        if ui.add(details_btn).clicked() {
+                            self.view_mode = ViewMode::Details;
+                        }
 
-                    if let Some(text) = to_copy {
-                        // Re-borrow self for clipboard
-                        self.copy_to_clipboard(text);
+                        let chain_btn = egui::Button::new(
+                            RichText::new("Chain View").size(theme::FONT_BODY)
+                        )
+                        .corner_radius(CornerRadius::same(4))
+                        .fill(if self.view_mode == ViewMode::Chain {
+                            theme::ACCENT
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        });
+                        if ui.add(chain_btn).clicked() {
+                            self.view_mode = ViewMode::Chain;
+                        }
+                    });
+                    ui.add_space(8.0);
+
+                    match self.view_mode {
+                        ViewMode::Details => {
+                            if let Some(cert) = self.certs.get(self.selected_tab) {
+                                let mut to_copy: Option<String> = None;
+                                draw_certificate(ui, cert, &mut |text| {
+                                    to_copy = Some(text);
+                                });
+
+                                if let Some(text) = to_copy {
+                                    self.copy_to_clipboard(text);
+                                }
+                            }
+                        }
+                        ViewMode::Chain => {
+                            let chain = CertChain::build(self.certs.clone());
+                            draw_chain(ui, &chain);
+                        }
                     }
                 }
             });
@@ -667,6 +719,188 @@ where
             for field in &cert.fields {
                 draw_field(ui, field, 0, on_copy);
             }
+        });
+}
+
+/// Draw certificate chain view.
+fn draw_chain(ui: &mut Ui, chain: &CertChain) {
+    use crate::cert::{ChainPosition, ChainValidationStatus};
+
+    // Chain status header
+    let (status_text, status_color) = match chain.validation_status {
+        ChainValidationStatus::Valid => ("✓ Valid Chain".to_string(), egui::Color32::GREEN),
+        ChainValidationStatus::Incomplete { missing_count } => (
+            format!("⚠ Incomplete Chain ({} missing)", missing_count),
+            egui::Color32::YELLOW,
+        ),
+        ChainValidationStatus::BrokenLinks => ("✗ Broken Links".to_string(), egui::Color32::RED),
+        ChainValidationStatus::Empty => ("Empty Chain".to_string(), egui::Color32::GRAY),
+    };
+
+    Frame::new()
+        .fill(theme::BG_SECONDARY)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::same(12))
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Certificate Chain")
+                            .size(theme::FONT_TITLE)
+                            .color(theme::TEXT_PRIMARY)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(status_text)
+                            .size(theme::FONT_BODY)
+                            .color(status_color),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!("{} certificate(s)", chain.certificates.len()))
+                        .size(theme::FONT_BODY)
+                        .color(theme::TEXT_SECONDARY),
+                );
+            });
+        });
+
+    ui.add_space(theme::SECTION_SPACING);
+
+    // Draw chain as tree
+    ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            for (i, chain_cert) in chain.certificates.iter().enumerate() {
+                draw_chain_cert(ui, chain_cert, i, chain.certificates.len());
+                ui.add_space(8.0);
+            }
+        });
+}
+
+/// Draw a single certificate in the chain view.
+fn draw_chain_cert(ui: &mut Ui, chain_cert: &crate::cert::ChainCert, index: usize, total: usize) {
+    use crate::cert::ChainPosition;
+
+    let position_text = match chain_cert.position {
+        ChainPosition::Leaf => "🍃 Leaf",
+        ChainPosition::Intermediate { depth } => &format!("🔗 Intermediate (depth {})", depth),
+        ChainPosition::Root => "🏛️ Root CA",
+    };
+
+    let position_color = match chain_cert.position {
+        ChainPosition::Leaf => egui::Color32::from_rgb(100, 200, 100),
+        ChainPosition::Intermediate { .. } => egui::Color32::from_rgb(100, 150, 200),
+        ChainPosition::Root => egui::Color32::from_rgb(200, 150, 100),
+    };
+
+    let border_color = if chain_cert.signature_valid {
+        egui::Color32::from_rgb(100, 200, 100)
+    } else {
+        egui::Color32::RED
+    };
+
+    Frame::new()
+        .fill(theme::BG_SECONDARY)
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::same(10))
+        .stroke(Stroke::new(2.0, border_color))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                // Position indicator
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(position_text)
+                            .size(theme::FONT_HEADING)
+                            .color(position_color)
+                            .strong(),
+                    );
+                    ui.label(
+                        RichText::new(format!("{} / {}", index + 1, total))
+                            .size(theme::FONT_BODY)
+                            .color(theme::TEXT_SECONDARY),
+                    );
+                });
+
+                ui.add_space(4.0);
+
+                // Certificate name
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&chain_cert.cert.display_name)
+                            .size(theme::FONT_BODY)
+                            .color(theme::TEXT_PRIMARY)
+                            .strong(),
+                    );
+                });
+
+                ui.add_space(4.0);
+
+                // Subject
+                ui.label(
+                    RichText::new("Subject:")
+                        .size(theme::FONT_BODY)
+                        .color(theme::TEXT_LABEL),
+                );
+                ui.label(
+                    RichText::new(&chain_cert.cert.subject)
+                        .size(theme::FONT_BODY)
+                        .color(theme::TEXT_VALUE),
+                );
+
+                // Issuer
+                ui.label(
+                    RichText::new("Issuer:")
+                        .size(theme::FONT_BODY)
+                        .color(theme::TEXT_LABEL),
+                );
+                ui.label(
+                    RichText::new(&chain_cert.cert.issuer)
+                        .size(theme::FONT_BODY)
+                        .color(theme::TEXT_VALUE),
+                );
+
+                // Validity
+                let validity_color = theme::validity_color(chain_cert.cert.validity_status);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Validity:")
+                            .size(theme::FONT_BODY)
+                            .color(theme::TEXT_LABEL),
+                    );
+                    ui.label(
+                        RichText::new(theme::validity_text(chain_cert.cert.validity_status))
+                            .size(theme::FONT_BODY)
+                            .color(validity_color),
+                    );
+                });
+
+                // Signature verification status
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Signature:")
+                            .size(theme::FONT_BODY)
+                            .color(theme::TEXT_LABEL),
+                    );
+                    let sig_text = if chain_cert.signature_valid {
+                        "✓ Valid"
+                    } else {
+                        "✗ Invalid"
+                    };
+                    let sig_color = if chain_cert.signature_valid {
+                        egui::Color32::GREEN
+                    } else {
+                        egui::Color32::RED
+                    };
+                    ui.label(
+                        RichText::new(sig_text)
+                            .size(theme::FONT_BODY)
+                            .color(sig_color),
+                    );
+                });
+            });
         });
 }
 
@@ -816,6 +1050,7 @@ mod tests {
             certs: Vec::new(),
             cert_index: HashMap::new(),
             selected_tab: 0,
+            view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
@@ -832,6 +1067,7 @@ mod tests {
             certs: Vec::new(),
             cert_index: HashMap::new(),
             selected_tab: 0,
+            view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
@@ -850,6 +1086,7 @@ mod tests {
             certs: Vec::new(),
             cert_index: HashMap::new(),
             selected_tab: 0,
+            view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
@@ -866,6 +1103,7 @@ mod tests {
             certs: Vec::new(),
             cert_index: HashMap::new(),
             selected_tab: 0,
+            view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,
@@ -887,6 +1125,7 @@ mod tests {
             certs: Vec::new(),
             cert_index: HashMap::new(),
             selected_tab: 0,
+            view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
             info_msg: None,
             theme_applied: false,

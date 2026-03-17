@@ -1,0 +1,24 @@
+[package]
+name = "cer-viewer-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cer-viewer = { path = ".." }
+
+[[bin]]
+name = "certificate_parsing"
+path = "fuzz_targets/certificate_parsing.rs"
+
+[[bin]]
+name = "asn1_parsing"
+path = "fuzz_targets/asn1_parsing.rs"
+
+[[bin]]
+name = "crl_parsing"
+path = "fuzz_targets/crl_parsing.rs"

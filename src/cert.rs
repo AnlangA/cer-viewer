@@ -8,7 +8,7 @@ mod error;
 mod extensions;
 pub mod format;
 
-pub use chain::{CertChain, ChainCert, ChainPosition, ChainValidationStatus};
+pub use chain::{CertChain, ChainCert, ChainPosition, ChainValidationStatus, SignatureStatus};
 pub use error::{CertError, Result};
 
 use serde::Serialize;

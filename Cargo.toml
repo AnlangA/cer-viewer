@@ -22,7 +22,8 @@ eframe = "0.33.3"
 egui = "0.33.3"
 
 # Certificate parsing
-x509-parser = "0.18.1"
+x509-parser = { version = "0.18.1", features = ["verify"] }
+ring = "0.17"
 pem = "3.0.6"
 
 # ASN.1 and DER parsing
@@ -72,7 +73,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [features]
-default = ["pkcs12", "private-keys"]
+default = ["pkcs12", "private-keys", "network"]
 # Enable network operations (OCSP/CRL)
 network = ["reqwest", "tokio"]
 # Enable PKCS#12 and CMS (PKCS#7) parsing

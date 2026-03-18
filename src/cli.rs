@@ -266,7 +266,7 @@ fn print_field_tree(field: &crate::cert::CertField, depth: usize) {
 }
 
 fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
-    let chain = CertChain::build(certs.to_vec());
+    let chain = build_and_complete_chain(certs);
 
     match format {
         OutputFormat::Text => {
@@ -295,11 +295,11 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
                 println!("   Subject: {}", chain_cert.cert.subject);
                 println!("   Issuer:  {}", chain_cert.cert.issuer);
                 println!(
-                    "   Valid:   {}",
-                    if chain_cert.signature_valid {
-                        "✓ Yes"
-                    } else {
-                        "✗ No"
+                    "   Signature: {}",
+                    match chain_cert.signature_status {
+                        crate::cert::SignatureStatus::Valid => "✓ Valid",
+                        crate::cert::SignatureStatus::Invalid => "✗ Invalid",
+                        crate::cert::SignatureStatus::Unknown => "? Unknown (issuer missing)",
                     }
                 );
                 println!();
@@ -315,13 +315,21 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
                         "subject": cc.cert.subject,
                         "issuer": cc.cert.issuer,
                         "position": format!("{:?}", cc.position),
-                        "signature_valid": cc.signature_valid,
+                        "signature_status": format!("{:?}", cc.signature_status),
                     })
                 }).collect::<Vec<_>>()
             });
             println!("{}", serde_json::to_string_pretty(&output).unwrap());
         }
     }
+}
+
+/// Build a chain and optionally complete it via AIA downloads.
+fn build_and_complete_chain(certs: &[ParsedCert]) -> CertChain {
+    let chain = CertChain::build(certs.to_vec());
+    #[cfg(feature = "network")]
+    let chain = chain.complete_chain();
+    chain
 }
 
 fn extract_field(cert: &ParsedCert, field: &str) {
@@ -381,7 +389,7 @@ fn verify_certificates(certs: &[ParsedCert]) {
 
     // Chain verification
     if certs.len() > 1 {
-        let chain = CertChain::build(certs.to_vec());
+        let chain = build_and_complete_chain(certs);
         match chain.validation_status {
             crate::cert::ChainValidationStatus::Valid => {
                 println!("Chain verification: ✓ Valid");

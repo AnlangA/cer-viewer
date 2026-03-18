@@ -217,14 +217,18 @@ impl OcspClient {
         const OID_OCSP: &str = "1.3.6.1.5.5.7.48.1";
 
         for field in &cert.fields {
-            if field.label.contains("Authority Information Access") || field.label.contains("AIA") {
+            if field.label.contains("Authority Information Access")
+                || field.label.contains("authorityInfoAccess")
+                || field.label.contains("AIA")
+            {
                 for child in &field.children {
                     if child.label.contains("OCSP")
                         || child.label.contains("On-line Certificate Status")
                     {
-                        if let Some(ref url) = child.value {
+                        if let Some(ref val) = child.value {
+                            let url = val.strip_prefix("URI: ").unwrap_or(val);
                             if url.starts_with("http://") || url.starts_with("https://") {
-                                return Some(url.clone());
+                                return Some(url.to_string());
                             }
                         }
                     }

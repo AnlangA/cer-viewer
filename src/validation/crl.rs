@@ -316,7 +316,8 @@ impl CrlClient {
         }
 
         // Try each URL until we get a valid response
-        for _url in &urls {
+        #[allow(unused_variables)]
+        for url in &urls {
             #[cfg(feature = "network")]
             match self.download(url) {
                 Ok(crl) => {

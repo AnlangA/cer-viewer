@@ -60,6 +60,15 @@ pub struct CertViewerApp {
     theme_applied: bool,
     /// Cached clipboard instance.
     clipboard: Option<arboard::Clipboard>,
+    /// Completed chain cache (with auto-downloaded intermediates).
+    #[cfg(feature = "network")]
+    completed_chain: Option<CertChain>,
+    /// Receiver for background chain completion results.
+    #[cfg(feature = "network")]
+    chain_completion_rx: Option<std::sync::mpsc::Receiver<CertChain>>,
+    /// Whether a chain completion download is in progress.
+    #[cfg(feature = "network")]
+    chain_completion_pending: bool,
 }
 
 impl CertViewerApp {
@@ -84,6 +93,12 @@ impl CertViewerApp {
             info_msg: None,
             theme_applied: false,
             clipboard,
+            #[cfg(feature = "network")]
+            completed_chain: None,
+            #[cfg(feature = "network")]
+            chain_completion_rx: None,
+            #[cfg(feature = "network")]
+            chain_completion_pending: false,
         }
     }
 
@@ -131,6 +146,7 @@ impl CertViewerApp {
 
                 info!(name = %parsed.display_name, "Certificate loaded");
                 self.error_msgs.clear();
+                self.invalidate_chain_cache();
                 let idx = self.certs.len();
                 self.cert_index.insert(parsed.id.clone(), idx);
                 self.certs.push(parsed);
@@ -208,6 +224,7 @@ impl CertViewerApp {
             self.selected_tab = idx;
             if loaded_count > 0 {
                 self.error_msgs.clear();
+                self.invalidate_chain_cache();
             }
         }
 
@@ -251,6 +268,7 @@ impl CertViewerApp {
 
             // Rebuild the index map since indices shifted
             self.rebuild_cert_index();
+            self.invalidate_chain_cache();
 
             self.show_info(format!("Closed: {}", name));
             if self.certs.is_empty() {
@@ -270,6 +288,7 @@ impl CertViewerApp {
         self.cert_index.clear();
         self.selected_tab = 0;
         self.error_msgs.clear();
+        self.invalidate_chain_cache();
         self.show_info(format!("Cleared {} certificate(s)", count));
     }
 
@@ -286,6 +305,41 @@ impl CertViewerApp {
     /// Show an info message.
     fn show_info(&mut self, msg: String) {
         self.info_msg = Some(msg);
+    }
+
+    /// Invalidate the completed chain cache and start a new background chain
+    /// completion if the chain is incomplete (called when certificates change).
+    fn invalidate_chain_cache(&mut self) {
+        #[cfg(feature = "network")]
+        {
+            self.completed_chain = None;
+            self.chain_completion_rx = None;
+            self.chain_completion_pending = false;
+            self.start_chain_completion();
+        }
+    }
+
+    /// Start background chain completion if the current chain is incomplete.
+    #[cfg(feature = "network")]
+    fn start_chain_completion(&mut self) {
+        if self.certs.is_empty() || self.chain_completion_pending {
+            return;
+        }
+        let chain = CertChain::build(self.certs.clone());
+        if matches!(
+            chain.validation_status,
+            cert::ChainValidationStatus::Incomplete { .. }
+        ) {
+            let certs_clone = self.certs.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.chain_completion_rx = Some(rx);
+            self.chain_completion_pending = true;
+
+            std::thread::spawn(move || {
+                let completed = CertChain::build(certs_clone).complete_chain();
+                let _ = tx.send(completed);
+            });
+        }
     }
 
     /// Copy text to clipboard using cached clipboard instance.
@@ -386,6 +440,30 @@ impl eframe::App for CertViewerApp {
 
         self.handle_shortcuts(ctx);
         self.handle_drag_drop(ctx);
+
+        // Poll background chain completion result every frame
+        #[cfg(feature = "network")]
+        {
+            let mut completed_chain_result = None;
+            if let Some(ref rx) = self.chain_completion_rx {
+                if let Ok(completed) = rx.try_recv() {
+                    completed_chain_result = Some(completed);
+                }
+            }
+            if let Some(completed) = completed_chain_result {
+                let original_ids: std::collections::HashSet<CertId> =
+                    self.certs.iter().map(|c| c.id.clone()).collect();
+                let new_certs = completed.downloaded_certs(&original_ids);
+                for new_cert in new_certs {
+                    self.cert_index
+                        .insert(new_cert.id.clone(), self.certs.len());
+                    self.certs.push(new_cert);
+                }
+                self.completed_chain = Some(completed);
+                self.chain_completion_rx = None;
+                self.chain_completion_pending = false;
+            }
+        }
 
         // ── Top panel: toolbar ─────────────────────────────────
         egui::TopBottomPanel::top("toolbar")
@@ -602,8 +680,71 @@ impl eframe::App for CertViewerApp {
                             }
                         }
                         ViewMode::Chain => {
-                            let chain = CertChain::build(self.certs.clone());
-                            draw_chain(ui, &chain);
+                            #[cfg(feature = "network")]
+                            {
+                                // Check for background completion result
+                                if let Some(ref rx) = self.chain_completion_rx {
+                                    if let Ok(completed) = rx.try_recv() {
+                                        let original_ids: std::collections::HashSet<CertId> =
+                                            self.certs.iter().map(|c| c.id.clone()).collect();
+                                        let new_certs = completed.downloaded_certs(&original_ids);
+                                        for cert in new_certs {
+                                            self.cert_index
+                                                .insert(cert.id.clone(), self.certs.len());
+                                            self.certs.push(cert);
+                                        }
+                                        self.completed_chain = Some(completed);
+                                        self.chain_completion_rx = None;
+                                        self.chain_completion_pending = false;
+                                    }
+                                }
+
+                                let chain = if let Some(ref completed) = self.completed_chain {
+                                    completed.clone()
+                                } else {
+                                    let chain = CertChain::build(self.certs.clone());
+
+                                    // If chain is incomplete and no download in progress, start one
+                                    if matches!(
+                                        chain.validation_status,
+                                        cert::ChainValidationStatus::Incomplete { .. }
+                                    ) && !self.chain_completion_pending
+                                    {
+                                        let certs_clone = self.certs.clone();
+                                        let (tx, rx) = std::sync::mpsc::channel();
+                                        self.chain_completion_rx = Some(rx);
+                                        self.chain_completion_pending = true;
+
+                                        std::thread::spawn(move || {
+                                            let completed =
+                                                CertChain::build(certs_clone).complete_chain();
+                                            let _ = tx.send(completed);
+                                        });
+                                    }
+
+                                    chain
+                                };
+
+                                // Show loading indicator while downloading
+                                if self.chain_completion_pending {
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new("Downloading missing certificates...")
+                                                .size(theme::FONT_BODY)
+                                                .color(theme::TEXT_SECONDARY),
+                                        );
+                                        ui.spinner();
+                                    });
+                                }
+
+                                draw_chain(ui, &chain);
+                            }
+                            #[cfg(not(feature = "network"))]
+                            {
+                                let chain = CertChain::build(self.certs.clone());
+                                draw_chain(ui, &chain);
+                            }
                         }
                     }
                 }
@@ -784,9 +925,9 @@ fn draw_chain_cert(ui: &mut Ui, chain_cert: &crate::cert::ChainCert, index: usiz
     use crate::cert::ChainPosition;
 
     let position_text = match chain_cert.position {
-        ChainPosition::Leaf => "🍃 Leaf",
-        ChainPosition::Intermediate { depth } => &format!("🔗 Intermediate (depth {})", depth),
-        ChainPosition::Root => "🏛️ Root CA",
+        ChainPosition::Leaf => "Leaf",
+        ChainPosition::Intermediate { depth } => &format!("Intermediate (depth {})", depth),
+        ChainPosition::Root => "Root CA",
     };
 
     let position_color = match chain_cert.position {
@@ -795,10 +936,12 @@ fn draw_chain_cert(ui: &mut Ui, chain_cert: &crate::cert::ChainCert, index: usiz
         ChainPosition::Root => egui::Color32::from_rgb(200, 150, 100),
     };
 
-    let border_color = if chain_cert.signature_valid {
-        egui::Color32::from_rgb(100, 200, 100)
-    } else {
-        egui::Color32::RED
+    use crate::cert::SignatureStatus;
+
+    let border_color = match chain_cert.signature_status {
+        SignatureStatus::Valid => egui::Color32::from_rgb(100, 200, 100),
+        SignatureStatus::Invalid => egui::Color32::RED,
+        SignatureStatus::Unknown => egui::Color32::from_rgb(200, 180, 50),
     };
 
     Frame::new()
@@ -883,15 +1026,10 @@ fn draw_chain_cert(ui: &mut Ui, chain_cert: &crate::cert::ChainCert, index: usiz
                             .size(theme::FONT_BODY)
                             .color(theme::TEXT_LABEL),
                     );
-                    let sig_text = if chain_cert.signature_valid {
-                        "✓ Valid"
-                    } else {
-                        "✗ Invalid"
-                    };
-                    let sig_color = if chain_cert.signature_valid {
-                        egui::Color32::GREEN
-                    } else {
-                        egui::Color32::RED
+                    let (sig_text, sig_color) = match chain_cert.signature_status {
+                        SignatureStatus::Valid => ("✓ Valid", egui::Color32::GREEN),
+                        SignatureStatus::Invalid => ("✗ Invalid", egui::Color32::RED),
+                        SignatureStatus::Unknown => ("? Unknown", egui::Color32::from_rgb(200, 180, 50)),
                     };
                     ui.label(
                         RichText::new(sig_text)
@@ -1043,9 +1181,8 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_app_initial_state() {
-        let app = CertViewerApp {
+    fn test_app() -> CertViewerApp {
+        CertViewerApp {
             certs: Vec::new(),
             cert_index: HashMap::new(),
             selected_tab: 0,
@@ -1054,7 +1191,18 @@ mod tests {
             info_msg: None,
             theme_applied: false,
             clipboard: None,
-        };
+            #[cfg(feature = "network")]
+            completed_chain: None,
+            #[cfg(feature = "network")]
+            chain_completion_rx: None,
+            #[cfg(feature = "network")]
+            chain_completion_pending: false,
+        }
+    }
+
+    #[test]
+    fn test_app_initial_state() {
+        let app = test_app();
         assert!(app.certs.is_empty());
         assert_eq!(app.selected_tab, 0);
         assert!(app.error_msgs.is_empty());
@@ -1062,16 +1210,7 @@ mod tests {
 
     #[test]
     fn test_load_valid_certificate() {
-        let mut app = CertViewerApp {
-            certs: Vec::new(),
-            cert_index: HashMap::new(),
-            selected_tab: 0,
-            view_mode: ViewMode::Details,
-            error_msgs: Vec::new(),
-            info_msg: None,
-            theme_applied: false,
-            clipboard: None,
-        };
+        let mut app = test_app();
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
         assert_eq!(app.certs.len(), 1);
@@ -1081,16 +1220,7 @@ mod tests {
 
     #[test]
     fn test_load_invalid_certificate_sets_error() {
-        let mut app = CertViewerApp {
-            certs: Vec::new(),
-            cert_index: HashMap::new(),
-            selected_tab: 0,
-            view_mode: ViewMode::Details,
-            error_msgs: Vec::new(),
-            info_msg: None,
-            theme_applied: false,
-            clipboard: None,
-        };
+        let mut app = test_app();
         app.load_certificate_bytes(b"not a certificate");
         assert!(app.certs.is_empty());
         assert!(!app.error_msgs.is_empty());
@@ -1098,16 +1228,7 @@ mod tests {
 
     #[test]
     fn test_load_duplicate_certificate() {
-        let mut app = CertViewerApp {
-            certs: Vec::new(),
-            cert_index: HashMap::new(),
-            selected_tab: 0,
-            view_mode: ViewMode::Details,
-            error_msgs: Vec::new(),
-            info_msg: None,
-            theme_applied: false,
-            clipboard: None,
-        };
+        let mut app = test_app();
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
         assert_eq!(app.certs.len(), 1);
@@ -1120,16 +1241,7 @@ mod tests {
 
     #[test]
     fn test_validity_status_display() {
-        let mut app = CertViewerApp {
-            certs: Vec::new(),
-            cert_index: HashMap::new(),
-            selected_tab: 0,
-            view_mode: ViewMode::Details,
-            error_msgs: Vec::new(),
-            info_msg: None,
-            theme_applied: false,
-            clipboard: None,
-        };
+        let mut app = test_app();
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
 

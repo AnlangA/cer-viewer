@@ -93,7 +93,10 @@ impl ParsedPrivateKey {
         let is_rsa = crate::utils::bytes_contains(pem_data, "-----BEGIN RSA PRIVATE KEY-----");
         let is_ec = crate::utils::bytes_contains_any(
             pem_data,
-            &["-----BEGIN EC PRIVATE KEY-----", "-----BEGIN EC PARAMETERS-----"],
+            &[
+                "-----BEGIN EC PRIVATE KEY-----",
+                "-----BEGIN EC PARAMETERS-----",
+            ],
         );
 
         // Extract DER from PEM
@@ -256,7 +259,10 @@ pub fn is_pem_private_key(data: &[u8]) -> bool {
 pub fn is_pkcs8_private_key(data: &[u8]) -> bool {
     crate::utils::bytes_contains_any(
         data,
-        &["-----BEGIN PRIVATE KEY-----", "-----BEGIN ENCRYPTED PRIVATE KEY-----"],
+        &[
+            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+        ],
     )
 }
 
@@ -269,7 +275,10 @@ pub fn is_rsa_private_key(data: &[u8]) -> bool {
 pub fn is_ec_private_key(data: &[u8]) -> bool {
     crate::utils::bytes_contains_any(
         data,
-        &["-----BEGIN EC PRIVATE KEY-----", "-----BEGIN EC PARAMETERS-----"],
+        &[
+            "-----BEGIN EC PRIVATE KEY-----",
+            "-----BEGIN EC PARAMETERS-----",
+        ],
     )
 }
 

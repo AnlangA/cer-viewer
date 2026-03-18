@@ -41,9 +41,10 @@ fn contains_pattern_ascii_case_insensitive(data: &[u8], pattern: &[u8]) -> bool 
     }
 
     data.windows(pattern.len()).any(|window| {
-        window.iter().zip(pattern.iter()).all(|(a, b)| {
-            a.eq_ignore_ascii_case(b)
-        })
+        window
+            .iter()
+            .zip(pattern.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
     })
 }
 
@@ -128,7 +129,10 @@ impl SensitiveDataType {
                 .unwrap_or(false);
 
         let has_secret = label_lower.contains("secret")
-            || value_lower.as_ref().map(|v| v.contains("secret")).unwrap_or(false);
+            || value_lower
+                .as_ref()
+                .map(|v| v.contains("secret"))
+                .unwrap_or(false);
 
         if has_private_key {
             Some(Self::PrivateKey)

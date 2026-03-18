@@ -9,6 +9,53 @@ mod extensions;
 pub mod format;
 
 pub use chain::{CertChain, ChainCert, ChainPosition, ChainValidationStatus, SignatureStatus};
+
+use std::collections::HashSet;
+
+/// Extract URLs from certificate extensions matching a label predicate.
+///
+/// Recursively searches the field tree for nodes whose label matches
+/// `ext_label_matcher`, then collects all HTTP(S)/LDAP URLs from descendant
+/// leaf values. Automatically strips the `URI: ` prefix.
+pub fn extract_urls_from_extension(
+    cert: &ParsedCert,
+    ext_label_matcher: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut seen = HashSet::new();
+
+    fn collect_from_node(
+        field: &CertField,
+        matcher: &dyn Fn(&str) -> bool,
+        urls: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+        inside_match: bool,
+    ) {
+        let is_match = inside_match || matcher(&field.label);
+
+        if is_match && field.children.is_empty() {
+            // Leaf node inside a matching branch
+            if let Some(ref val) = field.value {
+                let url = val.strip_prefix("URI: ").unwrap_or(val);
+                if (url.starts_with("http://") || url.starts_with("https://") || url.starts_with("ldap://"))
+                    && seen.insert(url.to_string())
+                {
+                    urls.push(url.to_string());
+                }
+            }
+        }
+
+        for child in &field.children {
+            collect_from_node(child, matcher, urls, seen, is_match);
+        }
+    }
+
+    for field in &cert.fields {
+        collect_from_node(field, &ext_label_matcher, &mut urls, &mut seen, false);
+    }
+
+    urls
+}
 pub use error::{CertError, Result};
 
 use serde::Serialize;
@@ -622,5 +669,67 @@ mod tests {
         assert_eq!(BASE64_STANDARD.encode(b"\x00\x00"), "AAA=");
         assert_eq!(BASE64_STANDARD.encode(b"\x00\x00\x00"), "AAAA");
         assert_eq!(BASE64_STANDARD.encode(b"Hello"), "SGVsbG8=");
+    }
+
+    #[test]
+    fn test_extract_urls_strips_uri_prefix() {
+        let cert = ParsedCert {
+            id: CertId("test".to_string()),
+            display_name: "Test".to_string(),
+            serial_number: "00".to_string(),
+            sha256_fingerprint: "AA".to_string(),
+            sha1_fingerprint: "BB".to_string(),
+            validity_status: ValidityStatus::Valid,
+            not_before: "2024-01-01 00:00:00 UTC".to_string(),
+            not_after: "2025-01-01 00:00:00 UTC".to_string(),
+            issuer: "CN=CA".to_string(),
+            subject: "CN=Test".to_string(),
+            fields: vec![
+                CertField::container(
+                    "Extensions",
+                    vec![CertField::node(
+                        "CA Issuers",
+                        "URI: https://example.com/ca.crt",
+                        vec![],
+                    )],
+                ),
+            ],
+            raw_der: Vec::new(),
+        };
+
+        let urls = extract_urls_from_extension(&cert, |l| l.contains("CA Issuers"));
+        assert_eq!(urls, vec!["https://example.com/ca.crt"]);
+    }
+
+    #[test]
+    fn test_extract_urls_recursive_search() {
+        let cert = ParsedCert {
+            id: CertId("test".to_string()),
+            display_name: "Test".to_string(),
+            serial_number: "00".to_string(),
+            sha256_fingerprint: "AA".to_string(),
+            sha1_fingerprint: "BB".to_string(),
+            validity_status: ValidityStatus::Valid,
+            not_before: "2024-01-01 00:00:00 UTC".to_string(),
+            not_after: "2025-01-01 00:00:00 UTC".to_string(),
+            issuer: "CN=CA".to_string(),
+            subject: "CN=Test".to_string(),
+            fields: vec![
+                CertField::container(
+                    "Extensions",
+                    vec![CertField::container(
+                        "CRL Distribution Points",
+                        vec![CertField::container(
+                            "Distribution Point",
+                            vec![CertField::leaf("URI: ", "URI: http://example.com/crl.crl")],
+                        )],
+                    )],
+                ),
+            ],
+            raw_der: Vec::new(),
+        };
+
+        let urls = extract_urls_from_extension(&cert, |l| l.contains("CRL"));
+        assert_eq!(urls, vec!["http://example.com/crl.crl"]);
     }
 }

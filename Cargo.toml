@@ -23,7 +23,6 @@ egui = "0.33.3"
 
 # Certificate parsing
 x509-parser = { version = "0.18.1", features = ["verify"] }
-ring = "0.17"
 pem = "3.0.6"
 
 # ASN.1 and DER parsing

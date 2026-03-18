@@ -21,6 +21,9 @@ pub struct CertChain {
     pub certificates: Vec<ChainCert>,
     /// Chain validation status.
     pub validation_status: ChainValidationStatus,
+    /// Human-readable error if chain completion failed (network feature).
+    #[cfg(feature = "network")]
+    pub completion_error: Option<String>,
 }
 
 /// Signature verification status for a certificate in the chain.
@@ -80,6 +83,8 @@ impl CertChain {
             return Self {
                 certificates: Vec::new(),
                 validation_status: ChainValidationStatus::Empty,
+                #[cfg(feature = "network")]
+                completion_error: None,
             };
         }
 
@@ -108,6 +113,8 @@ impl CertChain {
                 } else {
                     ChainValidationStatus::Incomplete { missing_count: 1 }
                 },
+                #[cfg(feature = "network")]
+                completion_error: None,
             };
         }
 
@@ -151,6 +158,8 @@ impl CertChain {
                     signature_status: SignatureStatus::Valid,
                 }],
                 validation_status: ChainValidationStatus::Valid,
+                #[cfg(feature = "network")]
+                completion_error: None,
             }
         }
     }
@@ -259,6 +268,8 @@ impl CertChain {
         Self {
             certificates: chain,
             validation_status,
+            #[cfg(feature = "network")]
+            completion_error: None,
         }
     }
 
@@ -268,39 +279,15 @@ impl CertChain {
     }
 
     /// Extract CA Issuers URL from the AIA extension of a certificate.
-    ///
-    /// Scans the certificate's field tree for the Authority Information Access
-    /// extension and returns the first HTTP(S) URL found under a "CA Issuers" entry.
     #[cfg_attr(not(feature = "network"), allow(dead_code))]
     pub fn extract_ca_issuers_url(cert: &ParsedCert) -> Option<String> {
-        fn find_url(fields: &[crate::cert::CertField]) -> Option<String> {
-            for field in fields {
-                if field.label.contains("Authority Information Access")
-                    || field.label.contains("authorityInfoAccess")
-                    || field.label.contains("AIA")
-                {
-                    for child in &field.children {
-                        if child.label.contains("CA Issuers")
-                            || child.label.contains("certificateAuthority")
-                            || child.label.contains("caIssuers")
-                        {
-                            if let Some(ref val) = child.value {
-                                let url = val.strip_prefix("URI: ").unwrap_or(val);
-                                if url.starts_with("http://") || url.starts_with("https://") {
-                                    return Some(url.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                // Recurse into children
-                if let Some(url) = find_url(&field.children) {
-                    return Some(url);
-                }
-            }
-            None
-        }
-        find_url(&cert.fields)
+        crate::cert::extract_urls_from_extension(cert, |label| {
+            label.contains("CA Issuers")
+                || label.contains("certificateAuthority")
+                || label.contains("caIssuers")
+        })
+        .into_iter()
+        .next()
     }
 
     /// Complete the chain by downloading missing issuer certificates from AIA URLs.
@@ -331,7 +318,9 @@ impl CertChain {
             let url = match Self::extract_ca_issuers_url(&last.cert) {
                 Some(u) => u,
                 None => {
-                    info!("No AIA CA Issuers URL for {}, stopping chain completion", last.cert.display_name);
+                    let msg = format!("No AIA CA Issuers URL for {}", last.cert.display_name);
+                    info!("{}", msg);
+                    self.completion_error = Some(msg);
                     break;
                 }
             };
@@ -367,7 +356,9 @@ impl CertChain {
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to download certificate from {}: {}", url, e);
+                    let msg = format!("Failed to download from {}: {}", url, e);
+                    warn!("{}", msg);
+                    self.completion_error = Some(msg);
                     break;
                 }
             }
@@ -488,6 +479,12 @@ impl CertChain {
             "Chain Length",
             format!("{} certificate(s)", self.certificates.len()),
         ));
+
+        // Add completion error if present
+        #[cfg(feature = "network")]
+        if let Some(ref err) = self.completion_error {
+            children.push(crate::cert::CertField::leaf("Completion Error", err));
+        }
 
         // Add each certificate in the chain
         for (i, chain_cert) in self.certificates.iter().enumerate() {
@@ -669,6 +666,8 @@ mod tests {
                 },
             ],
             validation_status: ChainValidationStatus::Incomplete { missing_count: 0 },
+            #[cfg(feature = "network")]
+            completion_error: None,
         };
 
         let tree = chain.to_field_tree();
@@ -685,5 +684,18 @@ mod tests {
         let url = url.unwrap();
         assert!(url.starts_with("http://") || url.starts_with("https://"));
         assert!(!url.contains("URI:"), "URL should not contain 'URI:' prefix");
+    }
+
+    #[test]
+    #[cfg(feature = "network")]
+    fn test_complete_chain_sets_error_on_no_aia() {
+        let cert = create_test_cert("CN=Leaf", "CN=Unknown CA");
+        let chain = CertChain::build(vec![cert]).complete_chain();
+        assert!(chain.completion_error.is_some());
+        assert!(
+            chain.completion_error.as_ref().unwrap().contains("No AIA"),
+            "Expected 'No AIA' in error, got: {:?}",
+            chain.completion_error
+        );
     }
 }

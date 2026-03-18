@@ -708,7 +708,6 @@ dependencies = [
  "pkcs8",
  "reqwest",
  "rfd",
- "ring",
  "sec1",
  "secrecy",
  "serde",

@@ -283,6 +283,10 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
             };
             println!("Status: {}", status_text);
             println!("Length: {} certificate(s)", chain.certificates.len());
+            #[cfg(feature = "network")]
+            if let Some(ref err) = chain.completion_error {
+                println!("Completion Error: {}", err);
+            }
             println!();
 
             for (i, chain_cert) in chain.certificates.iter().enumerate() {
@@ -404,6 +408,10 @@ fn verify_certificates(certs: &[ParsedCert]) {
                 println!("Chain verification: ✗ Broken links");
             }
             crate::cert::ChainValidationStatus::Empty => {}
+        }
+        #[cfg(feature = "network")]
+        if let Some(ref err) = chain.completion_error {
+            println!("Chain completion error: {}", err);
         }
     }
 }

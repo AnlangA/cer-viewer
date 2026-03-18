@@ -69,6 +69,9 @@ pub struct CertViewerApp {
     /// Whether a chain completion download is in progress.
     #[cfg(feature = "network")]
     chain_completion_pending: bool,
+    /// Cached chain before completion (rebuilt when certs change).
+    #[cfg(feature = "network")]
+    initial_chain: Option<CertChain>,
 }
 
 impl CertViewerApp {
@@ -99,6 +102,8 @@ impl CertViewerApp {
             chain_completion_rx: None,
             #[cfg(feature = "network")]
             chain_completion_pending: false,
+            #[cfg(feature = "network")]
+            initial_chain: None,
         }
     }
 
@@ -313,32 +318,28 @@ impl CertViewerApp {
         #[cfg(feature = "network")]
         {
             self.completed_chain = None;
+            self.initial_chain = None;
             self.chain_completion_rx = None;
             self.chain_completion_pending = false;
-            self.start_chain_completion();
-        }
-    }
 
-    /// Start background chain completion if the current chain is incomplete.
-    #[cfg(feature = "network")]
-    fn start_chain_completion(&mut self) {
-        if self.certs.is_empty() || self.chain_completion_pending {
-            return;
-        }
-        let chain = CertChain::build(self.certs.clone());
-        if matches!(
-            chain.validation_status,
-            cert::ChainValidationStatus::Incomplete { .. }
-        ) {
-            let certs_clone = self.certs.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.chain_completion_rx = Some(rx);
-            self.chain_completion_pending = true;
+            if self.certs.is_empty() || self.chain_completion_pending {
+                return;
+            }
+            let chain = CertChain::build(self.certs.clone());
+            if matches!(
+                chain.validation_status,
+                cert::ChainValidationStatus::Incomplete { .. }
+            ) {
+                let certs_clone = self.certs.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.chain_completion_rx = Some(rx);
+                self.chain_completion_pending = true;
 
-            std::thread::spawn(move || {
-                let completed = CertChain::build(certs_clone).complete_chain();
-                let _ = tx.send(completed);
-            });
+                std::thread::spawn(move || {
+                    let completed = CertChain::build(certs_clone).complete_chain();
+                    let _ = tx.send(completed);
+                });
+            }
         }
     }
 
@@ -682,13 +683,12 @@ impl eframe::App for CertViewerApp {
                         ViewMode::Chain => {
                             #[cfg(feature = "network")]
                             {
-                                // Check for background completion result
+                                // Poll background completion
                                 if let Some(ref rx) = self.chain_completion_rx {
                                     if let Ok(completed) = rx.try_recv() {
                                         let original_ids: std::collections::HashSet<CertId> =
                                             self.certs.iter().map(|c| c.id.clone()).collect();
-                                        let new_certs = completed.downloaded_certs(&original_ids);
-                                        for cert in new_certs {
+                                        for cert in completed.downloaded_certs(&original_ids) {
                                             self.cert_index
                                                 .insert(cert.id.clone(), self.certs.len());
                                             self.certs.push(cert);
@@ -699,33 +699,15 @@ impl eframe::App for CertViewerApp {
                                     }
                                 }
 
-                                let chain = if let Some(ref completed) = self.completed_chain {
-                                    completed.clone()
-                                } else {
-                                    let chain = CertChain::build(self.certs.clone());
+                                let chain = self
+                                    .completed_chain
+                                    .clone()
+                                    .unwrap_or_else(|| {
+                                        self.initial_chain
+                                            .get_or_insert_with(|| CertChain::build(self.certs.clone()))
+                                            .clone()
+                                    });
 
-                                    // If chain is incomplete and no download in progress, start one
-                                    if matches!(
-                                        chain.validation_status,
-                                        cert::ChainValidationStatus::Incomplete { .. }
-                                    ) && !self.chain_completion_pending
-                                    {
-                                        let certs_clone = self.certs.clone();
-                                        let (tx, rx) = std::sync::mpsc::channel();
-                                        self.chain_completion_rx = Some(rx);
-                                        self.chain_completion_pending = true;
-
-                                        std::thread::spawn(move || {
-                                            let completed =
-                                                CertChain::build(certs_clone).complete_chain();
-                                            let _ = tx.send(completed);
-                                        });
-                                    }
-
-                                    chain
-                                };
-
-                                // Show loading indicator while downloading
                                 if self.chain_completion_pending {
                                     ui.add_space(8.0);
                                     ui.horizontal(|ui| {
@@ -904,6 +886,17 @@ fn draw_chain(ui: &mut Ui, chain: &CertChain) {
                         .size(theme::FONT_BODY)
                         .color(theme::TEXT_SECONDARY),
                 );
+                #[cfg(feature = "network")]
+                if let Some(ref err) = chain.completion_error {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(err)
+                                .size(theme::FONT_BODY)
+                                .color(egui::Color32::RED),
+                        );
+                    });
+                }
             });
         });
 
@@ -1197,6 +1190,8 @@ mod tests {
             chain_completion_rx: None,
             #[cfg(feature = "network")]
             chain_completion_pending: false,
+            #[cfg(feature = "network")]
+            initial_chain: None,
         }
     }
 

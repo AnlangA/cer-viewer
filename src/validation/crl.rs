@@ -223,32 +223,11 @@ impl CrlClient {
         self
     }
 
-    /// Extract CRL distribution points from certificate extensions.
+    /// Extract CRL distribution point URLs from certificate extensions.
     pub fn extract_crl_urls(cert: &ParsedCert) -> Vec<String> {
-        let mut urls = Vec::new();
-
-        // Look for CRL Distribution Points extension
-        // OID: 2.5.29.31 (cRLDistributionPoints)
-        for field in &cert.fields {
-            if field.label.contains("CRL Distribution Points")
-                || field.label.contains("cRLDistributionPoints")
-            {
-                for child in &field.children {
-                    for subchild in &child.children {
-                        if let Some(ref url) = subchild.value {
-                            if url.starts_with("http://")
-                                || url.starts_with("https://")
-                                || url.starts_with("ldap://")
-                            {
-                                urls.push(url.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        urls
+        crate::cert::extract_urls_from_extension(cert, |label| {
+            label.contains("CRL Distribution Points") || label.contains("cRLDistributionPoints")
+        })
     }
 
     /// Download CRL from a URL (requires network feature).

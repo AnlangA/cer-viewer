@@ -53,12 +53,12 @@ pub enum ChainValidationStatus {
 }
 
 impl CertChain {
-    /// Build a certificate chain from a list of certificates.
+    /// Build a certificate chain from a slice of certificates.
     ///
     /// This function attempts to order certificates by following issuer
     /// relationships, starting from leaf certificates that are not issuers
     /// of any other certificate, up to self-signed root certificates.
-    pub fn build(certs: Vec<ParsedCert>) -> Self {
+    pub fn build(certs: &[ParsedCert]) -> Self {
         if certs.is_empty() {
             return Self {
                 certificates: Vec::new(),
@@ -77,7 +77,7 @@ impl CertChain {
 
             return Self {
                 certificates: vec![ChainCert {
-                    cert: certs.into_iter().next().unwrap(),
+                    cert: cert.clone(),
                     position,
                     signature_valid: is_root, // Single cert is valid only if self-signed
                 }],
@@ -119,12 +119,12 @@ impl CertChain {
 
         // Build chain from first leaf found
         if let Some(&leaf_idx) = leaf_indices.first() {
-            Self::build_chain_from_leaf(&certs, &subject_map, leaf_idx)
+            Self::build_chain_from_leaf(certs, &subject_map, leaf_idx)
         } else {
             // All are self-signed, pick first as root
             Self {
                 certificates: vec![ChainCert {
-                    cert: certs.into_iter().next().unwrap(),
+                    cert: certs[0].clone(),
                     position: ChainPosition::Root,
                     signature_valid: true,
                 }],
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_empty_chain() {
-        let chain = CertChain::build(Vec::new());
+        let chain = CertChain::build(&[]);
         assert_eq!(chain.certificates.len(), 0);
         assert_eq!(chain.validation_status, ChainValidationStatus::Empty);
     }
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn test_single_self_signed_cert() {
         let cert = create_test_cert("CN=Root CA", "CN=Root CA");
-        let chain = CertChain::build(vec![cert]);
+        let chain = CertChain::build(&[cert]);
 
         assert_eq!(chain.certificates.len(), 1);
         assert_eq!(chain.certificates[0].position, ChainPosition::Root);
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn test_single_non_self_signed_cert() {
         let cert = create_test_cert("CN=Leaf", "CN=Intermediate CA");
-        let chain = CertChain::build(vec![cert]);
+        let chain = CertChain::build(&[cert]);
 
         assert_eq!(chain.certificates.len(), 1);
         assert_eq!(chain.certificates[0].position, ChainPosition::Leaf);
@@ -355,7 +355,7 @@ mod tests {
         let intermediate = create_test_cert("CN=Intermediate CA", "CN=Root CA");
         let root = create_test_cert("CN=Root CA", "CN=Root CA");
 
-        let chain = CertChain::build(vec![root, intermediate, leaf]);
+        let chain = CertChain::build(&[root, intermediate, leaf]);
 
         assert_eq!(chain.certificates.len(), 3);
         assert_eq!(chain.certificates[0].position, ChainPosition::Leaf);

@@ -266,7 +266,7 @@ fn print_field_tree(field: &crate::cert::CertField, depth: usize) {
 }
 
 fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
-    let chain = CertChain::build(certs.to_vec());
+    let chain = CertChain::build(certs);
 
     match format {
         OutputFormat::Text => {
@@ -381,7 +381,7 @@ fn verify_certificates(certs: &[ParsedCert]) {
 
     // Chain verification
     if certs.len() > 1 {
-        let chain = CertChain::build(certs.to_vec());
+        let chain = CertChain::build(certs);
         match chain.validation_status {
             crate::cert::ChainValidationStatus::Valid => {
                 println!("Chain verification: ✓ Valid");

@@ -69,7 +69,7 @@ fn test_certificate_chain_building() {
         return;
     }
 
-    let chain = cer_viewer::cert::CertChain::build(certs);
+    let chain = cer_viewer::cert::CertChain::build(&certs);
 
     // We should have at least one certificate in the chain
     assert!(!chain.certificates.is_empty());

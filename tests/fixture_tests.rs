@@ -88,7 +88,7 @@ fn test_load_certificate_chain() {
     );
 
     // Build chain
-    let chain = cer_viewer::cert::CertChain::build(valid_certs);
+    let chain = cer_viewer::cert::CertChain::build(&valid_certs);
     assert!(!chain.certificates.is_empty());
 }
 
@@ -203,7 +203,7 @@ fn test_chain_from_fixtures() {
     let intermediate = cer_viewer::cert::parse_certificate(&intermediate_data).unwrap();
     let root = cer_viewer::cert::parse_certificate(&root_data).unwrap();
 
-    let chain = cer_viewer::cert::CertChain::build(vec![leaf, intermediate, root]);
+    let chain = cer_viewer::cert::CertChain::build(&[leaf, intermediate, root]);
 
     // Should have a valid chain
     assert!(!chain.certificates.is_empty());

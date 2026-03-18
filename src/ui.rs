@@ -3,7 +3,7 @@
 //! Contains the [`CertViewerApp`] struct that implements [`eframe::App`],
 //! plus helpers for drawing the certificate field tree.
 
-use crate::cert::{self, CertChain, CertField, CertId, ParsedCert, ValidityStatus};
+use crate::cert::{self, CertChain, CertField, CertId, ParsedCert};
 use crate::security::{is_potentially_sensitive, sensitive_copy_warning, SensitiveDataType};
 use crate::theme;
 use egui::{
@@ -162,7 +162,7 @@ impl CertViewerApp {
                 Ok(data) => {
                     // Use parse_certificates to support multi-cert PEM chains
                     let results = cert::parse_certificates(&data);
-                    for result in &results {
+                    for result in results {
                         match result {
                             Ok(parsed) => {
                                 if let Some(existing_idx) = self.find_certificate_by_id(&parsed.id)
@@ -178,7 +178,7 @@ impl CertViewerApp {
                                     info!(name = %parsed.display_name, "Certificate loaded from {:?}", path);
                                     let idx = self.certs.len();
                                     self.cert_index.insert(parsed.id.clone(), idx);
-                                    self.certs.push(parsed.clone());
+                                    self.certs.push(parsed);
                                     last_loaded_idx = Some(idx);
                                     loaded_count += 1;
                                 }
@@ -438,36 +438,37 @@ impl eframe::App for CertViewerApp {
                 if !self.certs.is_empty() {
                     ui.add_space(4.0);
 
-                    let tab_data: Vec<(usize, String, bool, ValidityStatus)> = self
-                        .certs
-                        .iter()
-                        .enumerate()
-                        .map(|(i, cert)| {
-                            let label = if cert.display_name.len() > 20 {
-                                format!("{}...", &cert.display_name[..17])
-                            } else {
-                                cert.display_name.clone()
-                            };
-                            (i, label, i == self.selected_tab, cert.validity_status)
-                        })
-                        .collect();
-
                     let mut action: Option<TabAction> = None;
+
+                    // Borrow fields up front to avoid capturing `self` in the closure
+                    let certs = &self.certs;
+                    let selected_tab = self.selected_tab;
 
                     egui::ScrollArea::horizontal()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                for (i, label, is_selected, validity) in &tab_data {
+                                for (i, cert) in certs.iter().enumerate() {
+                                    let is_selected = i == selected_tab;
+                                    // Avoid allocating a String for names that fit without truncation
+                                    let truncated;
+                                    let label: &str = if cert.display_name.len() > 20 {
+                                        truncated =
+                                            format!("{}...", &cert.display_name[..17]);
+                                        &truncated
+                                    } else {
+                                        &cert.display_name
+                                    };
+
                                     let tab_frame = Frame::new()
-                                        .fill(if *is_selected {
+                                        .fill(if is_selected {
                                             theme::BG_SECONDARY
                                         } else {
                                             egui::Color32::TRANSPARENT
                                         })
                                         .corner_radius(CornerRadius::same(4))
                                         .inner_margin(Margin::symmetric(8, 4))
-                                        .stroke(if *is_selected {
+                                        .stroke(if is_selected {
                                             Stroke::new(1.0, theme::ACCENT)
                                         } else {
                                             Stroke::new(1.0, theme::BORDER)
@@ -477,19 +478,20 @@ impl eframe::App for CertViewerApp {
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
-                                            let indicator_color = theme::validity_color(*validity);
+                                            let indicator_color =
+                                                theme::validity_color(cert.validity_status);
                                             ui.label(RichText::new("*").color(indicator_color));
 
                                             let text = RichText::new(label)
                                                 .size(theme::FONT_BODY)
-                                                .color(if *is_selected {
+                                                .color(if is_selected {
                                                     theme::TEXT_PRIMARY
                                                 } else {
                                                     theme::TEXT_SECONDARY
                                                 });
 
-                                            if ui.selectable_label(*is_selected, text).clicked() {
-                                                action = Some(TabAction::Select(*i));
+                                            if ui.selectable_label(is_selected, text).clicked() {
+                                                action = Some(TabAction::Select(i));
                                             }
 
                                             let close_btn =
@@ -498,7 +500,7 @@ impl eframe::App for CertViewerApp {
                                                     .corner_radius(CornerRadius::same(2));
 
                                             if ui.add(close_btn).clicked() {
-                                                action = Some(TabAction::Close(*i));
+                                                action = Some(TabAction::Close(i));
                                             }
                                         });
                                     });
@@ -602,7 +604,7 @@ impl eframe::App for CertViewerApp {
                             }
                         }
                         ViewMode::Chain => {
-                            let chain = CertChain::build(self.certs.clone());
+                            let chain = CertChain::build(&self.certs);
                             draw_chain(ui, &chain);
                         }
                     }
@@ -1042,6 +1044,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cert::ValidityStatus;
 
     #[test]
     fn test_app_initial_state() {

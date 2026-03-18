@@ -193,7 +193,7 @@ fn parse_key_usage(ku: &KeyUsage, children: &mut Vec<CertField>) {
 }
 
 fn parse_extended_key_usage(eku: &ExtendedKeyUsage, children: &mut Vec<CertField>) {
-    let mut usages: Vec<String> = flag_list![
+    let mut usages: Vec<&str> = flag_list![
         eku,
         "Server Auth" => eku.server_auth,
         "Client Auth" => eku.client_auth,
@@ -202,13 +202,11 @@ fn parse_extended_key_usage(eku: &ExtendedKeyUsage, children: &mut Vec<CertField
         "Time Stamping" => eku.time_stamping,
         "OCSP Signing" => eku.ocsp_signing,
         "Any" => eku.any,
-    ]
-    .into_iter()
-    .map(|s| s.to_string())
-    .collect();
+    ];
 
-    // Add custom OIDs
-    usages.extend(eku.other.iter().map(|oid| describe_oid(oid)));
+    // Collect OID descriptions separately so we can append them as &str
+    let oid_usages: Vec<String> = eku.other.iter().map(|oid| describe_oid(oid)).collect();
+    usages.extend(oid_usages.iter().map(String::as_str));
 
     children.push(CertField::leaf("Usages", usages.join(", ")));
 }

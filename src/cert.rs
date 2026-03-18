@@ -5,7 +5,7 @@
 
 mod chain;
 mod error;
-mod extensions;
+pub(crate) mod extensions;
 pub mod format;
 
 pub use chain::{CertChain, ChainCert, ChainPosition, ChainValidationStatus, SignatureStatus};
@@ -395,7 +395,7 @@ pub(crate) fn format_digest_hex<D: AsRef<[u8]>>(digest: &D) -> String {
     crate::utils::format_bytes_hex_colon(digest.as_ref())
 }
 
-fn extract_cn(name: &X509Name<'_>) -> Option<String> {
+pub(crate) fn extract_cn(name: &X509Name<'_>) -> Option<String> {
     for rdn in name.iter() {
         for attr in rdn.iter() {
             if attr.attr_type() == &oid_registry::OID_X509_COMMON_NAME {
@@ -406,7 +406,7 @@ fn extract_cn(name: &X509Name<'_>) -> Option<String> {
     None
 }
 
-fn build_name_field(label: &str, name: &X509Name<'_>) -> CertField {
+pub(crate) fn build_name_field(label: &str, name: &X509Name<'_>) -> CertField {
     let mut children = Vec::new();
     for rdn in name.iter() {
         for attr in rdn.iter() {
@@ -443,7 +443,7 @@ fn format_asn1_time(t: &ASN1Time) -> String {
         })
 }
 
-fn build_spki_field(spki: &SubjectPublicKeyInfo<'_>) -> CertField {
+pub(crate) fn build_spki_field(spki: &SubjectPublicKeyInfo<'_>) -> CertField {
     let algo = describe_oid(&spki.algorithm.algorithm);
     let key_data = &*spki.subject_public_key.data;
     let key_bits = key_data.len() * 8;

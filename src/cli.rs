@@ -1,20 +1,21 @@
 //! Command-line interface for cer-viewer.
 //!
-//! This module provides CLI functionality for viewing certificate information
-//! without the GUI, useful for scripting and remote servers.
+//! This module provides CLI functionality for viewing certificate and CSR
+//! information without the GUI, useful for scripting and remote servers.
 
-use crate::cert::{self, CertChain, ParsedCert};
+use crate::cert::{self, CertChain, CertField, ParsedCert};
+use crate::document::Document;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-/// Certificate viewer CLI - Display X.509 certificate information.
+/// Certificate viewer CLI - Display X.509 certificate and CSR information.
 #[derive(Parser, Debug)]
 #[command(name = "cer-viewer")]
 #[command(author = "cer-viewer contributors")]
 #[command(version = "0.1.0")]
-#[command(about = "A modern X.509 certificate viewer", long_about = None)]
+#[command(about = "A modern X.509 certificate and CSR viewer", long_about = None)]
 struct Cli {
-    /// Certificate file(s) to view (PEM or DER format)
+    /// Certificate or CSR file(s) to view (PEM or DER format)
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
@@ -46,7 +47,7 @@ enum Commands {
     },
     /// Extract specific field from certificate
     Extract {
-        /// Certificate file
+        /// Certificate or CSR file
         #[arg(value_name = "FILE")]
         file: PathBuf,
         /// Field name to extract (e.g., subject, issuer, serial)
@@ -95,24 +96,34 @@ pub fn run() -> Result<bool, String> {
         return run_command(cmd);
     }
 
-    // Load certificates from files
-    let mut certs = Vec::new();
+    // Load documents from files
+    let mut documents = Vec::new();
     for file in &cli.files {
-        match load_certificates_from_file(file) {
-            Ok(mut file_certs) => certs.append(&mut file_certs),
+        match load_documents_from_file(file) {
+            Ok(mut file_docs) => documents.append(&mut file_docs),
             Err(e) => eprintln!("Error loading {}: {}", file.display(), e),
         }
     }
 
-    if certs.is_empty() {
-        return Err("No valid certificates found.".to_string());
+    if documents.is_empty() {
+        return Err("No valid certificates or CSRs found.".to_string());
     }
 
     // Display based on mode
     if cli.chain {
+        let certs: Vec<ParsedCert> = documents
+            .into_iter()
+            .filter_map(|d| match d {
+                Document::Certificate(c) => Some(c),
+                _ => None,
+            })
+            .collect();
+        if certs.is_empty() {
+            return Err("Chain view requires certificates, not CSRs.".to_string());
+        }
         display_chain(&certs, cli.format);
     } else {
-        display_certificates(&certs, cli.format, cli.fields);
+        display_documents(&documents, cli.format, cli.fields);
     }
 
     Ok(true)
@@ -123,9 +134,11 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
         Commands::Chain { files } => {
             let mut certs = Vec::new();
             for file in &files {
-                match load_certificates_from_file(file) {
-                    Ok(mut file_certs) => certs.append(&mut file_certs),
-                    Err(e) => eprintln!("Error loading {}: {}", file.display(), e),
+                let docs = load_documents_from_file(file)?;
+                for doc in docs {
+                    if let Document::Certificate(cert) = doc {
+                        certs.push(cert);
+                    }
                 }
             }
             if certs.is_empty() {
@@ -134,19 +147,21 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
             display_chain(&certs, OutputFormat::Text);
         }
         Commands::Extract { file, field } => {
-            let certs = load_certificates_from_file(&file)?;
-            if let Some(cert) = certs.first() {
-                extract_field(cert, &field);
+            let docs = load_documents_from_file(&file)?;
+            if let Some(doc) = docs.first() {
+                extract_field(doc, &field);
             } else {
-                return Err("No valid certificate found.".to_string());
+                return Err("No valid certificate or CSR found.".to_string());
             }
         }
         Commands::Verify { files } => {
             let mut certs = Vec::new();
             for file in &files {
-                match load_certificates_from_file(file) {
-                    Ok(mut file_certs) => certs.append(&mut file_certs),
-                    Err(e) => eprintln!("Error loading {}: {}", file.display(), e),
+                let docs = load_documents_from_file(file)?;
+                for doc in docs {
+                    if let Document::Certificate(cert) = doc {
+                        certs.push(cert);
+                    }
                 }
             }
             if certs.is_empty() {
@@ -158,32 +173,38 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
     Ok(true)
 }
 
-fn load_certificates_from_file(path: &PathBuf) -> Result<Vec<ParsedCert>, String> {
+fn load_documents_from_file(path: &PathBuf) -> Result<Vec<Document>, String> {
     let data = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
-    let results = cert::parse_certificates(&data);
-    let mut certs = Vec::new();
+    let results = crate::document::load_documents(&data);
+    let mut docs = Vec::new();
+    let mut errors = Vec::new();
 
-    for result in results {
+    for result in &results {
         match result {
-            Ok(cert) => certs.push(cert),
-            Err(e) => return Err(format!("Failed to parse certificate: {}", e)),
+            Ok(doc) => docs.push(doc.clone()),
+            Err(e) => errors.push(e.clone()),
         }
     }
 
-    Ok(certs)
+    if docs.is_empty() && !errors.is_empty() {
+        return Err(errors[0].clone());
+    }
+
+    Ok(docs)
 }
 
-fn display_certificates(certs: &[ParsedCert], format: OutputFormat, fields_filter: Option<String>) {
+fn display_documents(docs: &[Document], format: OutputFormat, fields_filter: Option<String>) {
     match format {
         OutputFormat::Text => {
-            for (i, cert) in certs.iter().enumerate() {
-                if certs.len() > 1 {
-                    println!("Certificate #{}: {}", i + 1, cert.display_name);
+            for (i, doc) in docs.iter().enumerate() {
+                let type_label = if doc.is_csr() { "CSR" } else { "Certificate" };
+                if docs.len() > 1 {
+                    println!("{} #{}: {}", type_label, i + 1, doc.display_name());
                     println!("{}", "=".repeat(60));
                 }
-                print_certificate_text(cert, &fields_filter);
-                if i < certs.len() - 1 {
+                print_document_text(doc, &fields_filter);
+                if i < docs.len() - 1 {
                     println!();
                 }
             }
@@ -191,9 +212,16 @@ fn display_certificates(certs: &[ParsedCert], format: OutputFormat, fields_filte
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(certs).unwrap_or_else(|_| "[]".to_string())
+                serde_json::to_string_pretty(docs).unwrap_or_else(|_| "[]".to_string())
             );
         }
+    }
+}
+
+fn print_document_text(doc: &Document, fields_filter: &Option<String>) {
+    match doc {
+        Document::Certificate(cert) => print_certificate_text(cert, fields_filter),
+        Document::Csr(csr) => print_csr_text(csr, fields_filter),
     }
 }
 
@@ -203,10 +231,7 @@ fn print_certificate_text(cert: &ParsedCert, fields_filter: &Option<String>) {
         .map(|f| f.split(',').map(|s| s.trim().to_lowercase()).collect())
         .unwrap_or_default();
 
-    // If no specific fields requested, show all
     let show_all = fields_to_show.is_empty();
-
-    // Helper to check if a field should be shown
     let should_show =
         |name: &str| -> bool { show_all || fields_to_show.iter().any(|f| name.contains(f)) };
 
@@ -234,7 +259,6 @@ fn print_certificate_text(cert: &ParsedCert, fields_filter: &Option<String>) {
         println!("SHA-1 Fingerprint:   {}", cert.sha1_fingerprint);
     }
 
-    // If showing all or extensions requested, show extension count
     if show_all || should_show("extension") {
         let ext_count = cert
             .fields
@@ -246,14 +270,53 @@ fn print_certificate_text(cert: &ParsedCert, fields_filter: &Option<String>) {
     }
 
     if show_all {
-        // Show all fields as tree
         for field in &cert.fields {
             print_field_tree(field, 0);
         }
     }
 }
 
-fn print_field_tree(field: &crate::cert::CertField, depth: usize) {
+fn print_csr_text(csr: &crate::formats::csr::ParsedCsr, fields_filter: &Option<String>) {
+    let fields_to_show: Vec<String> = fields_filter
+        .as_ref()
+        .map(|f| f.split(',').map(|s| s.trim().to_lowercase()).collect())
+        .unwrap_or_default();
+
+    let show_all = fields_to_show.is_empty();
+    let should_show =
+        |name: &str| -> bool { show_all || fields_to_show.iter().any(|f| name.contains(f)) };
+
+    println!("[CSR]");
+    if should_show("subject") {
+        println!("Subject: {}", csr.subject);
+    }
+    if should_show("signature") || should_show("signature algorithm") {
+        println!("Signature Algorithm: {}", csr.signature_algorithm);
+    }
+    if should_show("fingerprint") {
+        println!("SHA-256 Fingerprint: {}", csr.sha256_fingerprint);
+        println!("SHA-1 Fingerprint:   {}", csr.sha1_fingerprint);
+    }
+
+    if show_all || should_show("extension") {
+        let ext_count = csr
+            .fields
+            .iter()
+            .find(|f| f.label == "Attributes")
+            .and_then(|a| a.children.iter().find(|c| c.label == "Extension Request"))
+            .map(|er| er.children.len())
+            .unwrap_or(0);
+        println!("Extensions: {}", ext_count);
+    }
+
+    if show_all {
+        for field in &csr.fields {
+            print_field_tree(field, 0);
+        }
+    }
+}
+
+fn print_field_tree(field: &CertField, depth: usize) {
     let indent = "  ".repeat(depth);
     if let Some(ref value) = field.value {
         println!("{}[{}] {}", indent, field.label, value);
@@ -274,11 +337,11 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
             println!("{}", "=".repeat(60));
 
             let status_text = match chain.validation_status {
-                crate::cert::ChainValidationStatus::Valid => "✓ Valid",
+                crate::cert::ChainValidationStatus::Valid => "Valid",
                 crate::cert::ChainValidationStatus::Incomplete { missing_count } => {
-                    &format!("⚠ Incomplete ({} missing)", missing_count)
+                    &format!("Incomplete ({} missing)", missing_count)
                 }
-                crate::cert::ChainValidationStatus::BrokenLinks => "✗ Broken Links",
+                crate::cert::ChainValidationStatus::BrokenLinks => "Broken Links",
                 crate::cert::ChainValidationStatus::Empty => "Empty",
             };
             println!("Status: {}", status_text);
@@ -301,9 +364,9 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
                 println!(
                     "   Signature: {}",
                     match chain_cert.signature_status {
-                        crate::cert::SignatureStatus::Valid => "✓ Valid",
-                        crate::cert::SignatureStatus::Invalid => "✗ Invalid",
-                        crate::cert::SignatureStatus::Unknown => "? Unknown (issuer missing)",
+                        crate::cert::SignatureStatus::Valid => "Valid",
+                        crate::cert::SignatureStatus::Invalid => "Invalid",
+                        crate::cert::SignatureStatus::Unknown => "Unknown (issuer missing)",
                     }
                 );
                 println!();
@@ -336,24 +399,40 @@ fn build_and_complete_chain(certs: &[ParsedCert]) -> CertChain {
     chain
 }
 
-fn extract_field(cert: &ParsedCert, field: &str) {
+fn extract_field(doc: &Document, field: &str) {
     let field_lower = field.to_lowercase();
 
-    let result = match field_lower.as_str() {
-        "subject" | "s" => cert.subject.clone(),
-        "issuer" | "i" => cert.issuer.clone(),
-        "serial" | "sn" => cert.serial_number.clone(),
-        "sha256" | "fingerprint" | "fp" => cert.sha256_fingerprint.clone(),
-        "sha1" => cert.sha1_fingerprint.clone(),
-        "not_before" | "nb" => cert.not_before.clone(),
-        "not_after" | "na" => cert.not_after.clone(),
-        "name" | "cn" => cert.display_name.clone(),
-        "pem" => cert.to_pem().trim().to_string(),
-        _ => {
-            eprintln!("Unknown field: {}", field);
-            eprintln!("Available fields: subject, issuer, serial, sha256, sha1, not_before, not_after, name, pem");
-            return;
-        }
+    let result = match doc {
+        Document::Certificate(cert) => match field_lower.as_str() {
+            "subject" | "s" => cert.subject.clone(),
+            "issuer" | "i" => cert.issuer.clone(),
+            "serial" | "sn" => cert.serial_number.clone(),
+            "sha256" | "fingerprint" | "fp" => cert.sha256_fingerprint.clone(),
+            "sha1" => cert.sha1_fingerprint.clone(),
+            "not_before" | "nb" => cert.not_before.clone(),
+            "not_after" | "na" => cert.not_after.clone(),
+            "name" | "cn" => cert.display_name.clone(),
+            "pem" => cert.to_pem().trim().to_string(),
+            _ => {
+                eprintln!("Unknown field: {}", field);
+                eprintln!(
+                    "Available fields: subject, issuer, serial, sha256, sha1, not_before, not_after, name, pem"
+                );
+                return;
+            }
+        },
+        Document::Csr(csr) => match field_lower.as_str() {
+            "subject" | "s" | "name" | "cn" => csr.subject.clone(),
+            "sha256" | "fingerprint" | "fp" => csr.sha256_fingerprint.clone(),
+            "sha1" => csr.sha1_fingerprint.clone(),
+            "signature" | "sig" => csr.signature_algorithm.clone(),
+            "pem" => csr.to_pem().trim().to_string(),
+            _ => {
+                eprintln!("Unknown field: {}", field);
+                eprintln!("Available CSR fields: subject, sha256, sha1, signature, pem");
+                return;
+            }
+        },
     };
 
     println!("{}", result);
@@ -367,20 +446,18 @@ fn verify_certificates(certs: &[ParsedCert]) {
     for (i, cert) in certs.iter().enumerate() {
         println!("Certificate #{}: {}", i + 1, cert.display_name);
 
-        // Check validity
         match cert.validity_status {
             cert::ValidityStatus::Valid => {
-                println!("  Time validity: ✓ Valid");
+                println!("  Time validity: Valid");
             }
             cert::ValidityStatus::Expired => {
-                println!("  Time validity: ✗ Expired");
+                println!("  Time validity: Expired");
             }
             cert::ValidityStatus::NotYetValid => {
-                println!("  Time validity: ✗ Not yet valid");
+                println!("  Time validity: Not yet valid");
             }
         }
 
-        // Check self-signed
         let is_self_signed = cert.issuer == cert.subject;
         if is_self_signed {
             println!("  Self-signed: Yes (Root CA)");
@@ -391,21 +468,20 @@ fn verify_certificates(certs: &[ParsedCert]) {
         println!();
     }
 
-    // Chain verification
     if certs.len() > 1 {
         let chain = build_and_complete_chain(certs);
         match chain.validation_status {
             crate::cert::ChainValidationStatus::Valid => {
-                println!("Chain verification: ✓ Valid");
+                println!("Chain verification: Valid");
             }
             crate::cert::ChainValidationStatus::Incomplete { missing_count } => {
                 println!(
-                    "Chain verification: ⚠ Incomplete ({} missing certificate(s))",
+                    "Chain verification: Incomplete ({} missing certificate(s))",
                     missing_count
                 );
             }
             crate::cert::ChainValidationStatus::BrokenLinks => {
-                println!("Chain verification: ✗ Broken links");
+                println!("Chain verification: Broken links");
             }
             crate::cert::ChainValidationStatus::Empty => {}
         }
@@ -428,29 +504,27 @@ mod tests {
 
     #[test]
     fn test_extract_field_subject() {
-        // This would need a real certificate for a meaningful test
-        // For now, just test the function doesn't panic on unknown field
-        let cert = create_test_cert();
-        // We can't easily test extract_field since it prints to stdout
-        // Just verify the cert has expected fields
-        assert!(!cert.subject.is_empty());
-        assert!(!cert.issuer.is_empty());
+        let docs = crate::document::load_documents(include_bytes!("../assets/baidu.com.pem"));
+        assert!(docs[0].as_ref().is_ok());
+        let doc = docs[0].as_ref().unwrap();
+        assert!(!doc.subject().is_empty());
     }
 
-    fn create_test_cert() -> ParsedCert {
-        ParsedCert {
-            id: cert::CertId("test".to_string()),
-            display_name: "Test Cert".to_string(),
-            serial_number: "00:11:22:33".to_string(),
-            sha256_fingerprint: "AA:BB:CC:DD".to_string(),
-            sha1_fingerprint: "11:22:33:44".to_string(),
-            validity_status: cert::ValidityStatus::Valid,
-            not_before: "2024-01-01 00:00:00 UTC".to_string(),
-            not_after: "2025-01-01 00:00:00 UTC".to_string(),
-            issuer: "CN=Test CA".to_string(),
-            subject: "CN=Test".to_string(),
-            fields: Vec::new(),
-            raw_der: Vec::new(),
-        }
+    #[test]
+    fn test_extract_field_from_csr() {
+        let docs = crate::document::load_documents(include_bytes!("../assets/test.csr"));
+        assert!(docs[0].as_ref().is_ok());
+        let doc = docs[0].as_ref().unwrap();
+        assert!(doc.is_csr());
+        assert!(doc.subject().contains("Test Certificate"));
+    }
+
+    #[test]
+    fn test_load_csr_from_file() {
+        let docs = load_documents_from_file(&std::path::PathBuf::from("assets/test.csr"));
+        assert!(docs.is_ok());
+        let docs = docs.unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].is_csr());
     }
 }

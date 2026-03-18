@@ -453,8 +453,7 @@ impl eframe::App for CertViewerApp {
                                     // Avoid allocating a String for names that fit without truncation
                                     let truncated;
                                     let label: &str = if cert.display_name.len() > 20 {
-                                        truncated =
-                                            format!("{}...", &cert.display_name[..17]);
+                                        truncated = format!("{}...", &cert.display_name[..17]);
                                         &truncated
                                     } else {
                                         &cert.display_name

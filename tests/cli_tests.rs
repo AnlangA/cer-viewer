@@ -3,8 +3,8 @@
 //! These tests verify the CLI mode functionality including
 //! certificate parsing, output formats, and error handling.
 
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Get the path to the cer-viewer binary.
 #[allow(dead_code)] // Reserved for future direct binary testing
@@ -163,12 +163,7 @@ fn test_cli_verify_mode() {
     }
 
     let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "verify",
-            cert_path.to_str().unwrap(),
-        ])
+        .args(["run", "--", "verify", cert_path.to_str().unwrap()])
         .output()
         .unwrap();
 
@@ -227,9 +222,7 @@ fn test_cli_invalid_certificate() {
     // Should fail gracefully
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !output.status.success() || stderr.contains("Error") || stdout.contains("Error")
-    );
+    assert!(!output.status.success() || stderr.contains("Error") || stdout.contains("Error"));
 
     // Clean up
     let _ = std::fs::remove_file(invalid_cert);
@@ -265,13 +258,7 @@ fn test_cli_pem_export_field() {
     }
 
     let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "extract",
-            cert_path.to_str().unwrap(),
-            "pem",
-        ])
+        .args(["run", "--", "extract", cert_path.to_str().unwrap(), "pem"])
         .output()
         .unwrap();
 

@@ -78,7 +78,10 @@ pub fn is_pem_private_key(data: &[u8]) -> bool {
 pub fn is_pem_pkcs8_key(data: &[u8]) -> bool {
     utils::bytes_contains_any(
         data,
-        &["-----BEGIN PRIVATE KEY-----", "-----BEGIN ENCRYPTED PRIVATE KEY-----"],
+        &[
+            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+        ],
     )
 }
 

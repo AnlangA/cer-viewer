@@ -63,7 +63,7 @@ fixtures/
 - `example.com.csr` - CSR for example.com
 - `subdomain.example.com.csr` - CSR for subdomain
 - `test.org.csr` - CSR for test.org
-- `*.example.com.csr` - CSR for wildcard certificate
+- `wildcard.example.com.csr` - CSR for wildcard certificate
 
 ### PKCS#12 Archives (`pkcs12/`)
 - `example.p12` - PKCS#12 bundle with password "test123"

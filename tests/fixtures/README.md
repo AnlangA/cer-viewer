@@ -33,7 +33,7 @@ fixtures/
 - `example.com.crt` - Leaf certificate for example.com
 - `subdomain.example.com.crt` - Leaf certificate for subdomain
 - `test.org.crt` - Leaf certificate for test.org
-- `*.example.com.crt` - Wildcard certificate for *.example.com
+- `wildcard.example.com.crt` - Wildcard certificate for *.example.com
 - `ec cert-ec.crt` - EC certificate (P-256 curve)
 - `ec p-384-ec.crt` - EC certificate (P-384 curve)
 - `self-signed cert.crt` - Generic self-signed certificate

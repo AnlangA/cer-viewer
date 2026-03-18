@@ -73,8 +73,10 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-minimal-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install cargo-minimal-versions
-        run: cargo install cargo-minimal-versions
+      - name: Install cargo-hack and cargo-minimal-versions
+        run: |
+          cargo install cargo-hack --locked
+          cargo install cargo-minimal-versions
 
       - name: Test minimal versions
         run: |

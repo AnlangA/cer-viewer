@@ -368,7 +368,7 @@ impl CertViewerApp {
         // Partition into leaf and non-leaf
         let mut leafs: Vec<ParsedCert> = Vec::new();
         let mut others: Vec<ParsedCert> = Vec::new();
-        for (cert, is_leaf) in leaf_certs.into_iter().zip(is_leaf_vec.into_iter()) {
+        for (cert, is_leaf) in leaf_certs.into_iter().zip(is_leaf_vec) {
             if is_leaf {
                 leafs.push(cert);
             } else {

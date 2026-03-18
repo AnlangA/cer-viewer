@@ -95,7 +95,7 @@ fn test_load_certificate_chain() {
 /// Test wildcard certificate.
 #[test]
 fn test_load_wildcard_certificate() {
-    let cert_path = PathBuf::from("tests/fixtures/certificates/valid/*.example.com.crt");
+    let cert_path = PathBuf::from("tests/fixtures/certificates/valid/wildcard.example.com.crt");
     if !cert_path.exists() {
         println!("Skipping: fixture not found");
         return;

@@ -211,7 +211,7 @@ def generate_wildcard_cert():
 
     if ca_key and ca_cert:
         generate_leaf_cert(
-            "*.example.com",
+            "wildcard.example.com",
             ca_key,
             ca_cert,
             san=["*.example.com", "example.com"]

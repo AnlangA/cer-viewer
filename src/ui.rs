@@ -230,6 +230,7 @@ impl CertViewerApp {
             if loaded_count > 0 {
                 self.error_msgs.clear();
                 self.invalidate_chain_cache();
+                self.reorder_certs();
             }
         }
 
@@ -274,14 +275,13 @@ impl CertViewerApp {
             // Rebuild the index map since indices shifted
             self.rebuild_cert_index();
             self.invalidate_chain_cache();
+            self.reorder_certs();
 
             self.show_info(format!("Closed: {}", name));
             if self.certs.is_empty() {
                 self.selected_tab = 0;
             } else if self.selected_tab >= self.certs.len() {
                 self.selected_tab = self.certs.len() - 1;
-            } else if self.selected_tab > index {
-                self.selected_tab -= 1;
             }
         }
     }
@@ -305,6 +305,87 @@ impl CertViewerApp {
             .enumerate()
             .map(|(i, cert)| (cert.id.clone(), i))
             .collect();
+    }
+
+    /// Check if a certificate is a leaf (end-entity) certificate.
+    ///
+    /// A certificate is a leaf if no other certificate in the set has it as issuer,
+    /// or if it's the only non-self-signed certificate.
+    fn is_leaf_cert(&self, idx: usize) -> bool {
+        if idx >= self.certs.len() {
+            return false;
+        }
+        let subject = &self.certs[idx].subject;
+        let is_self_signed = self.certs[idx].issuer == *subject;
+        if is_self_signed {
+            return false;
+        }
+        // Leaf = no other cert lists this cert's subject as its issuer
+        for (i, cert) in self.certs.iter().enumerate() {
+            if i != idx && cert.issuer == *subject {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Reorder certificates so leaf certs are on the left.
+    ///
+    /// Among leaf certs, preserves their original relative order.
+    /// Among non-leaf certs, preserves their original relative order.
+    /// Updates `selected_tab` to track the previously selected cert.
+    fn reorder_certs(&mut self) {
+        let selected_id = self.certs.get(self.selected_tab).map(|c| c.id.clone());
+
+        let mut leaf_certs: Vec<ParsedCert> = Vec::new();
+
+        for cert in self.certs.drain(..) {
+            // Determine leaf status based on remaining certs in original set.
+            // We need to check before draining removes everything, so we use
+            // the chain logic: a cert is leaf if no other cert has it as issuer.
+            // Since we're draining in order, we check against the full set first.
+            leaf_certs.push(cert);
+        }
+
+        // Re-evaluate: check all certs against each other to determine leaf status
+        let all_certs: Vec<&ParsedCert> = leaf_certs.iter().collect();
+        let mut is_leaf_vec: Vec<bool> = Vec::with_capacity(all_certs.len());
+        for (i, cert) in all_certs.iter().enumerate() {
+            if cert.issuer == cert.subject {
+                is_leaf_vec.push(false);
+                continue;
+            }
+            let mut is_issuer = false;
+            for (j, other) in all_certs.iter().enumerate() {
+                if j != i && other.issuer == cert.subject {
+                    is_issuer = true;
+                    break;
+                }
+            }
+            is_leaf_vec.push(!is_issuer);
+        }
+
+        // Partition into leaf and non-leaf
+        let mut leafs: Vec<ParsedCert> = Vec::new();
+        let mut others: Vec<ParsedCert> = Vec::new();
+        for (cert, is_leaf) in leaf_certs.into_iter().zip(is_leaf_vec.into_iter()) {
+            if is_leaf {
+                leafs.push(cert);
+            } else {
+                others.push(cert);
+            }
+        }
+
+        self.certs = leafs;
+        self.certs.extend(others);
+        self.rebuild_cert_index();
+
+        // Restore selected tab
+        if let Some(ref id) = selected_id {
+            if let Some(&new_idx) = self.cert_index.get(id) {
+                self.selected_tab = new_idx;
+            }
+        }
     }
 
     /// Show an info message.
@@ -455,6 +536,7 @@ impl eframe::App for CertViewerApp {
                 let original_ids: std::collections::HashSet<CertId> =
                     self.certs.iter().map(|c| c.id.clone()).collect();
                 let new_certs = completed.downloaded_certs(&original_ids);
+                let has_new = !new_certs.is_empty();
                 for new_cert in new_certs {
                     self.cert_index
                         .insert(new_cert.id.clone(), self.certs.len());
@@ -463,6 +545,10 @@ impl eframe::App for CertViewerApp {
                 self.completed_chain = Some(completed);
                 self.chain_completion_rx = None;
                 self.chain_completion_pending = false;
+                if has_new {
+                    self.rebuild_cert_index();
+                    self.reorder_certs();
+                }
             }
         }
 
@@ -517,7 +603,7 @@ impl eframe::App for CertViewerApp {
                 if !self.certs.is_empty() {
                     ui.add_space(4.0);
 
-                    let tab_data: Vec<(usize, String, bool, ValidityStatus)> = self
+                    let tab_data: Vec<(usize, String, bool, ValidityStatus, bool)> = self
                         .certs
                         .iter()
                         .enumerate()
@@ -527,7 +613,13 @@ impl eframe::App for CertViewerApp {
                             } else {
                                 cert.display_name.clone()
                             };
-                            (i, label, i == self.selected_tab, cert.validity_status)
+                            (
+                                i,
+                                label,
+                                i == self.selected_tab,
+                                cert.validity_status,
+                                self.is_leaf_cert(i),
+                            )
                         })
                         .collect();
 
@@ -537,7 +629,7 @@ impl eframe::App for CertViewerApp {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                for (i, label, is_selected, validity) in &tab_data {
+                                for (i, label, is_selected, validity, is_leaf) in &tab_data {
                                     let tab_frame = Frame::new()
                                         .fill(if *is_selected {
                                             theme::BG_SECONDARY
@@ -556,7 +648,11 @@ impl eframe::App for CertViewerApp {
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
-                                            let indicator_color = theme::validity_color(*validity);
+                                            let indicator_color = if *is_leaf {
+                                                theme::LEAF_INDICATOR
+                                            } else {
+                                                theme::validity_color(*validity)
+                                            };
                                             ui.label(RichText::new("*").color(indicator_color));
 
                                             let text = RichText::new(label)
@@ -688,7 +784,9 @@ impl eframe::App for CertViewerApp {
                                     if let Ok(completed) = rx.try_recv() {
                                         let original_ids: std::collections::HashSet<CertId> =
                                             self.certs.iter().map(|c| c.id.clone()).collect();
-                                        for cert in completed.downloaded_certs(&original_ids) {
+                                        let new_certs = completed.downloaded_certs(&original_ids);
+                                        let has_new = !new_certs.is_empty();
+                                        for cert in new_certs {
                                             self.cert_index
                                                 .insert(cert.id.clone(), self.certs.len());
                                             self.certs.push(cert);
@@ -696,17 +794,18 @@ impl eframe::App for CertViewerApp {
                                         self.completed_chain = Some(completed);
                                         self.chain_completion_rx = None;
                                         self.chain_completion_pending = false;
+                                        if has_new {
+                                            self.rebuild_cert_index();
+                                            self.reorder_certs();
+                                        }
                                     }
                                 }
 
-                                let chain = self
-                                    .completed_chain
-                                    .clone()
-                                    .unwrap_or_else(|| {
-                                        self.initial_chain
-                                            .get_or_insert_with(|| CertChain::build(self.certs.clone()))
-                                            .clone()
-                                    });
+                                let chain = self.completed_chain.clone().unwrap_or_else(|| {
+                                    self.initial_chain
+                                        .get_or_insert_with(|| CertChain::build(self.certs.clone()))
+                                        .clone()
+                                });
 
                                 if self.chain_completion_pending {
                                     ui.add_space(8.0);
@@ -1022,7 +1121,9 @@ fn draw_chain_cert(ui: &mut Ui, chain_cert: &crate::cert::ChainCert, index: usiz
                     let (sig_text, sig_color) = match chain_cert.signature_status {
                         SignatureStatus::Valid => ("✓ Valid", egui::Color32::GREEN),
                         SignatureStatus::Invalid => ("✗ Invalid", egui::Color32::RED),
-                        SignatureStatus::Unknown => ("? Unknown", egui::Color32::from_rgb(200, 180, 50)),
+                        SignatureStatus::Unknown => {
+                            ("? Unknown", egui::Color32::from_rgb(200, 180, 50))
+                        }
                     };
                     ui.label(
                         RichText::new(sig_text)

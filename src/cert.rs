@@ -37,7 +37,9 @@ pub fn extract_urls_from_extension(
             // Leaf node inside a matching branch
             if let Some(ref val) = field.value {
                 let url = val.strip_prefix("URI: ").unwrap_or(val);
-                if (url.starts_with("http://") || url.starts_with("https://") || url.starts_with("ldap://"))
+                if (url.starts_with("http://")
+                    || url.starts_with("https://")
+                    || url.starts_with("ldap://"))
                     && seen.insert(url.to_string())
                 {
                     urls.push(url.to_string());
@@ -684,16 +686,14 @@ mod tests {
             not_after: "2025-01-01 00:00:00 UTC".to_string(),
             issuer: "CN=CA".to_string(),
             subject: "CN=Test".to_string(),
-            fields: vec![
-                CertField::container(
-                    "Extensions",
-                    vec![CertField::node(
-                        "CA Issuers",
-                        "URI: https://example.com/ca.crt",
-                        vec![],
-                    )],
-                ),
-            ],
+            fields: vec![CertField::container(
+                "Extensions",
+                vec![CertField::node(
+                    "CA Issuers",
+                    "URI: https://example.com/ca.crt",
+                    vec![],
+                )],
+            )],
             raw_der: Vec::new(),
         };
 
@@ -714,18 +714,16 @@ mod tests {
             not_after: "2025-01-01 00:00:00 UTC".to_string(),
             issuer: "CN=CA".to_string(),
             subject: "CN=Test".to_string(),
-            fields: vec![
-                CertField::container(
-                    "Extensions",
+            fields: vec![CertField::container(
+                "Extensions",
+                vec![CertField::container(
+                    "CRL Distribution Points",
                     vec![CertField::container(
-                        "CRL Distribution Points",
-                        vec![CertField::container(
-                            "Distribution Point",
-                            vec![CertField::leaf("URI: ", "URI: http://example.com/crl.crl")],
-                        )],
+                        "Distribution Point",
+                        vec![CertField::leaf("URI: ", "URI: http://example.com/crl.crl")],
                     )],
-                ),
-            ],
+                )],
+            )],
             raw_der: Vec::new(),
         };
 

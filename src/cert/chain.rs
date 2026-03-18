@@ -6,9 +6,9 @@
 
 use crate::cert::{ParsedCert, ValidityStatus};
 use serde::Serialize;
+use std::collections::HashMap;
 #[cfg(feature = "network")]
 use std::collections::HashSet;
-use std::collections::HashMap;
 #[cfg(feature = "network")]
 use tracing::{info, warn};
 #[cfg(feature = "network")]
@@ -683,7 +683,10 @@ mod tests {
         assert!(url.is_some(), "Expected CA Issuers URL in baidu.com.pem");
         let url = url.unwrap();
         assert!(url.starts_with("http://") || url.starts_with("https://"));
-        assert!(!url.contains("URI:"), "URL should not contain 'URI:' prefix");
+        assert!(
+            !url.contains("URI:"),
+            "URL should not contain 'URI:' prefix"
+        );
     }
 
     #[test]

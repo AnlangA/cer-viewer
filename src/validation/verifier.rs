@@ -527,7 +527,7 @@ mod tests {
         // Case 1: self-signed without custom trust -> Warning
         let cert = load_fixture(path);
         let verifier = Verifier::with_system_trust();
-        let report = verifier.verify(&[cert.clone()]);
+        let report = verifier.verify(std::slice::from_ref(&cert));
         // May be Ok (if system trust) or Warning (if not in system trust)
         assert!(
             matches!(

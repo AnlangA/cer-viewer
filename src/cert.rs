@@ -382,7 +382,7 @@ fn build_cert_tree(cert: &X509Certificate<'_>, der_data: Vec<u8>) -> ParsedCert 
 // ── Helper formatters ──────────────────────────────────────────────
 
 /// Format a hash digest (implements `AsRef<[u8]>`) as a colon-separated uppercase hex string.
-pub(crate) fn format_digest_hex<D: AsRef<[u8]>>(digest: &D) -> String {
+pub fn format_digest_hex<D: AsRef<[u8]>>(digest: &D) -> String {
     crate::utils::format_bytes_hex_colon(digest.as_ref())
 }
 

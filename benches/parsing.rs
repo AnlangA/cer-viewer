@@ -4,8 +4,10 @@
 
 use cer_viewer::cert::{self, CertChain};
 use cer_viewer::formats::csr;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use cer_viewer::utils::format_bytes_hex_colon;
+use criterion::{criterion_group, criterion_main, Criterion};
 use sha2::{Digest, Sha256};
+use std::hint::black_box;
 
 /// PEM certificate data (baidu.com).
 fn pem_cert_data() -> &'static [u8] {
@@ -97,7 +99,7 @@ fn bench_fingerprint(c: &mut Criterion) {
     group.bench_function("sha256_fingerprint", |b| {
         b.iter(|| {
             let hash = Sha256::digest(&der_data);
-            black_box(cert::format_digest_hex(&hash));
+            black_box(format_bytes_hex_colon(&hash));
         });
     });
 

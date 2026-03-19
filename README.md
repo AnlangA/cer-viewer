@@ -2,6 +2,8 @@
 
 一款基于 [egui](https://github.com/emilk/egui)/[eframe](https://github.com/emilk/egui/tree/master/crates/eframe) 构建的现代化 X.509 证书查看器，支持 GUI 图形界面与 CLI 命令行两种使用模式。
 
+中文 | [English](README.en.md)
+
 [![CI](https://github.com/AnlangA/cer-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/AnlangA/cer-viewer/actions)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 [![Rust 1.80+](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org/)

@@ -142,12 +142,14 @@ pub enum ValidationResult {
 mod tests {
     use super::*;
 
-    // Helper: build a minimal self-signed DER certificate from fixture files.
+    // Helper: load a DER certificate from a fixture file (auto-converts PEM → DER).
     fn load_fixture(path: &str) -> Vec<u8> {
-        let data = std::fs::read(path).expect("fixture not found");
+        let data =
+            std::fs::read(path).unwrap_or_else(|e| panic!("failed to read fixture '{path}': {e}"));
         // Convert PEM → DER if needed.
         if data.starts_with(b"-----") {
-            crate::export::pem_to_der(&data).expect("pem_to_der failed")
+            crate::export::pem_to_der(&data)
+                .unwrap_or_else(|e| panic!("pem_to_der failed for '{path}': {e}"))
         } else {
             data
         }

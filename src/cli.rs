@@ -493,13 +493,38 @@ fn convert_certificate(
 }
 
 /// Heuristically determine the PEM label for a DER blob by trying to parse it
-/// as common certificate types.
+/// as common certificate and key types.
 fn detect_der_label(data: &[u8]) -> &'static str {
-    // Try X.509 certificate first (most common case).
+    // Try X.509 certificate (most common case).
     if crate::cert::parse_der_certificate(data).is_ok() {
         return "CERTIFICATE";
     }
-    // Default fallback.
+
+    // Try CSR (PKCS#10 CertificationRequest).
+    #[cfg(feature = "pkcs12")]
+    if crate::formats::csr::is_der_csr(data) {
+        return "CERTIFICATE REQUEST";
+    }
+
+    // Try PKCS#8 private key.
+    #[cfg(feature = "private-keys")]
+    if crate::formats::keys::is_pkcs8_private_key(data) {
+        return "PRIVATE KEY";
+    }
+
+    // Try EC private key (SEC1).
+    #[cfg(feature = "private-keys")]
+    if crate::formats::keys::is_ec_private_key(data) {
+        return "EC PRIVATE KEY";
+    }
+
+    // Try RSA private key (PKCS#1).
+    #[cfg(feature = "private-keys")]
+    if crate::formats::keys::is_rsa_private_key(data) {
+        return "RSA PRIVATE KEY";
+    }
+
+    // Default: treat as a generic certificate.
     "CERTIFICATE"
 }
 
@@ -551,7 +576,7 @@ mod tests {
             return;
         }
 
-        let out_path = PathBuf::from("/tmp/test_convert_baidu.der");
+        let out_path = std::env::temp_dir().join("cer_viewer_test_convert_baidu.der");
         let result = convert_certificate(&pem_path, &out_path, ConvertFormat::Der);
         assert!(result.is_ok(), "PEM→DER conversion failed: {result:?}");
 
@@ -579,8 +604,8 @@ mod tests {
         }
 
         // First convert PEM → DER, then DER → PEM.
-        let der_path = PathBuf::from("/tmp/test_convert_baidu_roundtrip.der");
-        let pem_out_path = PathBuf::from("/tmp/test_convert_baidu_roundtrip.pem");
+        let der_path = std::env::temp_dir().join("cer_viewer_test_convert_roundtrip.der");
+        let pem_out_path = std::env::temp_dir().join("cer_viewer_test_convert_roundtrip.pem");
 
         convert_certificate(&pem_path, &der_path, ConvertFormat::Der).unwrap();
         let result = convert_certificate(&der_path, &pem_out_path, ConvertFormat::Pem);
@@ -610,7 +635,7 @@ mod tests {
             return;
         }
 
-        let out_path = PathBuf::from("/tmp/test_convert_noop.pem");
+        let out_path = std::env::temp_dir().join("cer_viewer_test_convert_noop.pem");
         let result = convert_certificate(&pem_path, &out_path, ConvertFormat::Pem);
         assert!(result.is_ok());
 

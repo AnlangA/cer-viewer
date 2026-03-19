@@ -59,6 +59,18 @@ enum Commands {
         #[arg(value_name = "FILE")]
         files: Vec<PathBuf>,
     },
+    /// Convert certificate between PEM and DER formats
+    Convert {
+        /// Input certificate file
+        #[arg(value_name = "INPUT")]
+        input: PathBuf,
+        /// Output file path
+        #[arg(value_name = "OUTPUT")]
+        output: PathBuf,
+        /// Target format (pem or der)
+        #[arg(long, value_enum, default_value_t = ConvertFormat::Pem)]
+        to: ConvertFormat,
+    },
 }
 
 /// Output format for certificate information.
@@ -69,6 +81,15 @@ enum OutputFormat {
     Text,
     /// JSON format
     Json,
+}
+
+/// Target format for the `convert` subcommand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ConvertFormat {
+    /// PEM format (base64-encoded with header/footer lines)
+    Pem,
+    /// DER format (binary ASN.1)
+    Der,
 }
 
 /// Run the CLI application.
@@ -153,6 +174,9 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
                 return Err("No valid certificates found.".to_string());
             }
             verify_certificates(&certs);
+        }
+        Commands::Convert { input, output, to } => {
+            convert_certificate(&input, &output, to)?;
         }
     }
     Ok(true)
@@ -416,6 +440,69 @@ fn verify_certificates(certs: &[ParsedCert]) {
     }
 }
 
+/// Convert a certificate file between PEM and DER formats.
+///
+/// Reads `input`, auto-detects its current format, converts to `target`,
+/// and writes the result to `output`.
+fn convert_certificate(
+    input: &PathBuf,
+    output: &PathBuf,
+    target: ConvertFormat,
+) -> Result<(), String> {
+    let data =
+        std::fs::read(input).map_err(|e| format!("Failed to read '{}': {e}", input.display()))?;
+
+    let output_data: Vec<u8> = match target {
+        ConvertFormat::Der => {
+            // Input is PEM → convert to DER.
+            if data.starts_with(b"-----") {
+                crate::export::pem_to_der(&data)
+                    .map_err(|e| format!("PEM → DER conversion failed: {e}"))?
+            } else {
+                // Already DER – write as-is.
+                data
+            }
+        }
+        ConvertFormat::Pem => {
+            // Input is DER → wrap in PEM.
+            if data.starts_with(b"-----") {
+                // Already PEM – write as-is.
+                data
+            } else {
+                // Detect what kind of DER object this is by attempting a parse.
+                let label = detect_der_label(&data);
+                crate::export::to_pem(label, &data).into_bytes()
+            }
+        }
+    };
+
+    std::fs::write(output, &output_data)
+        .map_err(|e| format!("Failed to write '{}': {e}", output.display()))?;
+
+    println!(
+        "Converted '{}' → '{}' ({})",
+        input.display(),
+        output.display(),
+        match target {
+            ConvertFormat::Der => "DER",
+            ConvertFormat::Pem => "PEM",
+        }
+    );
+
+    Ok(())
+}
+
+/// Heuristically determine the PEM label for a DER blob by trying to parse it
+/// as common certificate types.
+fn detect_der_label(data: &[u8]) -> &'static str {
+    // Try X.509 certificate first (most common case).
+    if crate::cert::parse_der_certificate(data).is_ok() {
+        return "CERTIFICATE";
+    }
+    // Default fallback.
+    "CERTIFICATE"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,5 +539,100 @@ mod tests {
             fields: Vec::new(),
             raw_der: Vec::new(),
         }
+    }
+
+    #[test]
+    fn test_convert_pem_to_der() {
+        use std::path::PathBuf;
+
+        let pem_path = PathBuf::from("assets/baidu.com.pem");
+        if !pem_path.exists() {
+            println!("Skipping: asset not found");
+            return;
+        }
+
+        let out_path = PathBuf::from("/tmp/test_convert_baidu.der");
+        let result = convert_certificate(&pem_path, &out_path, ConvertFormat::Der);
+        assert!(result.is_ok(), "PEM→DER conversion failed: {result:?}");
+
+        let der_bytes = std::fs::read(&out_path).expect("output not written");
+        assert!(!der_bytes.is_empty());
+        // Valid DER starts with SEQUENCE tag 0x30.
+        assert_eq!(der_bytes[0], 0x30, "DER should start with SEQUENCE tag");
+
+        // The DER should be parseable as a certificate.
+        let cert = crate::cert::parse_der_certificate(&der_bytes);
+        assert!(cert.is_ok(), "resulting DER should parse: {cert:?}");
+
+        // Clean up.
+        let _ = std::fs::remove_file(&out_path);
+    }
+
+    #[test]
+    fn test_convert_der_to_pem() {
+        use std::path::PathBuf;
+
+        let pem_path = PathBuf::from("assets/baidu.com.pem");
+        if !pem_path.exists() {
+            println!("Skipping: asset not found");
+            return;
+        }
+
+        // First convert PEM → DER, then DER → PEM.
+        let der_path = PathBuf::from("/tmp/test_convert_baidu_roundtrip.der");
+        let pem_out_path = PathBuf::from("/tmp/test_convert_baidu_roundtrip.pem");
+
+        convert_certificate(&pem_path, &der_path, ConvertFormat::Der).unwrap();
+        let result = convert_certificate(&der_path, &pem_out_path, ConvertFormat::Pem);
+        assert!(result.is_ok(), "DER→PEM conversion failed: {result:?}");
+
+        let pem_bytes = std::fs::read(&pem_out_path).expect("output not written");
+        let pem_str = std::str::from_utf8(&pem_bytes).expect("PEM should be UTF-8");
+        assert!(pem_str.contains("-----BEGIN CERTIFICATE-----"));
+        assert!(pem_str.contains("-----END CERTIFICATE-----"));
+
+        // Round-tripped certificate should parse.
+        let cert = crate::cert::parse_pem_certificate(&pem_bytes);
+        assert!(cert.is_ok(), "round-tripped PEM should parse: {cert:?}");
+
+        // Clean up.
+        let _ = std::fs::remove_file(&der_path);
+        let _ = std::fs::remove_file(&pem_out_path);
+    }
+
+    #[test]
+    fn test_convert_pem_already_pem_is_noop() {
+        use std::path::PathBuf;
+
+        let pem_path = PathBuf::from("assets/baidu.com.pem");
+        if !pem_path.exists() {
+            println!("Skipping: asset not found");
+            return;
+        }
+
+        let out_path = PathBuf::from("/tmp/test_convert_noop.pem");
+        let result = convert_certificate(&pem_path, &out_path, ConvertFormat::Pem);
+        assert!(result.is_ok());
+
+        let original = std::fs::read(&pem_path).unwrap();
+        let output = std::fs::read(&out_path).unwrap();
+        assert_eq!(
+            original, output,
+            "no-op conversion should produce identical bytes"
+        );
+
+        let _ = std::fs::remove_file(&out_path);
+    }
+
+    #[test]
+    fn test_convert_nonexistent_input_returns_error() {
+        use std::path::PathBuf;
+
+        let result = convert_certificate(
+            &PathBuf::from("/tmp/nonexistent_cert_12345.pem"),
+            &PathBuf::from("/tmp/out.der"),
+            ConvertFormat::Der,
+        );
+        assert!(result.is_err(), "expected error for missing file");
     }
 }

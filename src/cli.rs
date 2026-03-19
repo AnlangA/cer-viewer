@@ -5,6 +5,8 @@
 
 use crate::cert::{self, CertChain, CertField, ParsedCert};
 use crate::document::Document;
+use crate::validation::report::OverallStatus;
+use crate::validation::verifier::Verifier;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::io::{self, Read};
@@ -66,6 +68,15 @@ enum Commands {
         /// Certificate file(s) to verify
         #[arg(value_name = "FILE")]
         files: Vec<PathBuf>,
+        /// Custom CA bundle file (PEM) for trust verification
+        #[arg(long, value_name = "FILE")]
+        trust_store: Option<PathBuf>,
+        /// Output format
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+        /// Optional hostname to verify against SAN
+        #[arg(long)]
+        hostname: Option<String>,
     },
     /// Convert certificate between PEM and DER formats
     Convert {
@@ -219,7 +230,12 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
                 return Err("No valid certificate or CSR found.".to_string());
             }
         }
-        Commands::Verify { files } => {
+        Commands::Verify {
+            files,
+            trust_store,
+            format,
+            hostname,
+        } => {
             let mut certs = Vec::new();
             for file in &files {
                 let docs = load_documents_from_path(file)?;
@@ -232,7 +248,78 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
             if certs.is_empty() {
                 return Err("No valid certificates found.".to_string());
             }
-            verify_certificates(&certs);
+
+            // Load custom trust store if provided
+            let custom_roots = if let Some(ts_path) = &trust_store {
+                let ts_data = std::fs::read(ts_path).map_err(|e| {
+                    format!("Failed to read trust store '{}': {}", ts_path.display(), e)
+                })?;
+                let trust_certs = crate::cert::parse_pem_certificates(&ts_data);
+                let roots: Vec<Vec<u8>> = trust_certs
+                    .into_iter()
+                    .filter_map(|r| r.ok())
+                    .map(|c| c.raw_der)
+                    .collect();
+                if roots.is_empty() {
+                    return Err("No valid certificates found in trust store.".to_string());
+                }
+                Some(roots)
+            } else {
+                None
+            };
+
+            let verifier = match custom_roots {
+                Some(roots) => Verifier::with_custom_trust(roots),
+                None => Verifier::with_system_trust(),
+            };
+
+            let mut report = verifier.verify(&certs);
+
+            // Hostname check
+            if let Some(ref host) = hostname {
+                // Check if hostname matches any SAN
+                let host_matches = certs.iter().any(|c| {
+                    c.fields.iter().any(|f| {
+                        f.children.iter().any(|ext| {
+                            if ext.label.contains("subjectAltName")
+                                || ext.label.contains("Subject Alternative Name")
+                            {
+                                ext.children.iter().any(|child| {
+                                    if child.label == "Alternative Names" {
+                                        child.children.iter().any(|name| {
+                                            name.value.as_ref().is_some_and(|v| {
+                                                if let Some(dns) = v.strip_prefix("DNS:") {
+                                                    let dns = dns.trim();
+                                                    dns == host
+                                                        || host.ends_with(&format!(".{}", dns))
+                                                        || (dns.starts_with("*.")
+                                                            && host.ends_with(&dns[1..]))
+                                                } else {
+                                                    false
+                                                }
+                                            })
+                                        })
+                                    } else {
+                                        false
+                                    }
+                                })
+                            } else {
+                                false
+                            }
+                        })
+                    })
+                });
+                if !host_matches {
+                    // Not a hard failure in the report, but we should note it
+                    // We can add a note to the output
+                    report.overall_status = OverallStatus::Failed;
+                }
+            }
+
+            match format {
+                OutputFormat::Json => display_verify_json(&report),
+                _ => display_verify_text(&report),
+            }
         }
         Commands::Convert { input, output, to } => {
             convert_certificate(&input, &output, to)?;
@@ -591,58 +678,129 @@ fn extract_field(doc: &Document, field: &str) {
     println!("{}", result);
 }
 
-fn verify_certificates(certs: &[ParsedCert]) {
-    println!("{}", "Certificate Verification".bold());
+fn display_verify_text(report: &crate::validation::report::VerificationReport) {
+    use crate::validation::report::OverallStatus;
+
+    println!("{}", "Certificate Verification Report".bold());
     println!("{}", "=".repeat(60));
     println!();
 
-    for (i, cert) in certs.iter().enumerate() {
-        println!("Certificate #{}: {}", i + 1, cert.display_name);
+    for (i, cert) in report.certificates.iter().enumerate() {
+        println!("Certificate #{}: {}", i + 1, cert.name);
 
-        match cert.validity_status {
-            cert::ValidityStatus::Valid => {
-                println!("  Time validity: {}", "Valid".green());
-            }
-            cert::ValidityStatus::Expired => {
-                println!("  Time validity: {}", "Expired".red());
-            }
-            cert::ValidityStatus::NotYetValid => {
-                println!("  Time validity: {}", "Not yet valid".yellow());
-            }
+        // Time validity
+        let time_status = if cert.time_validity.valid {
+            format!("[OK] {}", cert.time_validity.status)
+                .green()
+                .to_string()
+        } else {
+            format!("[X] {}", cert.time_validity.status)
+                .red()
+                .to_string()
+        };
+        println!("  Time validity:       {}", time_status);
+        println!("    Not Before:  {}", cert.time_validity.not_before);
+        println!("    Not After:   {}", cert.time_validity.not_after);
+
+        // Signature
+        let sig_status = if cert.signature.verified {
+            format!("[OK] {}", cert.signature.status)
+                .green()
+                .to_string()
+        } else {
+            format!("[X] {}", cert.signature.status).red().to_string()
+        };
+        println!("  Signature:           {}", sig_status);
+
+        // Trust
+        let trust_status = if cert.trust.trusted {
+            format!("[OK] {}", cert.trust.status).green().to_string()
+        } else {
+            format!("[!] {}", cert.trust.status).yellow().to_string()
+        };
+        println!("  Trust:               {}", trust_status);
+
+        // Self-signed
+        if cert.self_signed {
+            println!("  Self-signed:         Yes");
         }
 
-        let is_self_signed = cert.issuer == cert.subject;
-        if is_self_signed {
-            println!("  Self-signed: Yes (Root CA)");
-        } else {
-            println!("  Self-signed: No");
+        // Key Usage
+        if !cert.key_usage.is_empty() {
+            println!("  Key Usage:           {}", cert.key_usage.join(", "));
+        }
+
+        // Extended Key Usage
+        if !cert.extended_key_usage.is_empty() {
+            println!(
+                "  Extended Key Usage:  {}",
+                cert.extended_key_usage.join(", ")
+            );
+        }
+
+        // SAN
+        if !cert.san_entries.is_empty() {
+            let san_str: Vec<String> = cert
+                .san_entries
+                .iter()
+                .map(|s| format!("{}:{}", s.san_type, s.value))
+                .collect();
+            println!("  SAN:                 {}", san_str.join(", "));
         }
 
         println!();
     }
 
-    if certs.len() > 1 {
-        let chain = build_and_complete_chain(certs);
-        match chain.validation_status {
-            crate::cert::ChainValidationStatus::Valid => {
-                println!("Chain verification: {}", "Valid".green());
-            }
-            crate::cert::ChainValidationStatus::Incomplete { missing_count } => {
-                println!(
-                    "Chain verification: {}",
-                    format!("Incomplete ({} missing certificate(s))", missing_count).yellow()
-                );
-            }
-            crate::cert::ChainValidationStatus::BrokenLinks => {
-                println!("Chain verification: {}", "Broken links".red());
-            }
-            crate::cert::ChainValidationStatus::Empty => {}
+    // Chain info
+    if let Some(ref chain) = report.chain {
+        let chain_status = if chain.valid {
+            format!("[OK] {}", chain.status).green().to_string()
+        } else {
+            format!("[X] {}", chain.status).red().to_string()
+        };
+        println!("Chain verification:    {}", chain_status);
+        println!("  Chain length:        {} certificate(s)", chain.length);
+        println!("  Structural check:    {}", chain.structural_check);
+
+        for link in &chain.links {
+            let sig_label = if link.signature_status == "Verified" {
+                link.signature_status.green().to_string()
+            } else {
+                link.signature_status.red().to_string()
+            };
+            let suffix = if link.self_signed {
+                let trust_label = if link.trusted {
+                    ", Trusted ".to_string() + &"[OK]".green().to_string()
+                } else {
+                    ", Not Trusted".to_string()
+                };
+                format!("Self-Signed{}", trust_label)
+            } else {
+                String::new()
+            };
+            println!(
+                "  {}: {} — Signature {}{}",
+                link.position, link.name, sig_label, suffix
+            );
         }
-        #[cfg(feature = "network")]
-        if let Some(ref err) = chain.completion_error {
-            println!("Chain completion error: {}", err);
-        }
+        println!();
     }
+
+    // Overall
+    let overall = match report.overall_status {
+        OverallStatus::Ok => "PASS".green().to_string(),
+        OverallStatus::Failed => "FAIL".red().to_string(),
+        OverallStatus::Warning => "WARN".yellow().to_string(),
+    };
+    println!("OVERALL: {}", overall);
+}
+
+fn display_verify_json(report: &crate::validation::report::VerificationReport) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(report)
+            .unwrap_or_else(|e| format!("JSON serialization error: {e}"))
+    );
 }
 
 /// Convert a certificate file between PEM and DER formats.

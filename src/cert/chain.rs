@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 #[cfg(feature = "network")]
 use tracing::{info, warn};
-#[cfg(feature = "network")]
 use x509_parser::prelude::*;
 
 /// A certificate chain with ordered certificates from leaf to root.
@@ -148,7 +147,10 @@ impl CertChain {
 
         // Build chain from first leaf found
         if let Some(&leaf_idx) = leaf_indices.first() {
-            Self::build_chain_from_leaf(&certs, &subject_map, leaf_idx)
+            let mut chain = Self::build_chain_from_leaf(&certs, &subject_map, leaf_idx);
+            Self::verify_signatures(&mut chain);
+            chain.validation_status = chain.compute_validation_status();
+            chain
         } else {
             // All are self-signed, pick first as root
             Self {
@@ -406,8 +408,7 @@ impl CertChain {
     ///
     /// For each non-root certificate, re-parses it and its issuer's DER data
     /// and calls `verify_signature()` with the issuer's public key.
-    #[cfg(feature = "network")]
-    fn verify_signatures(chain: &mut Self) {
+    pub fn verify_signatures(chain: &mut Self) {
         for i in 0..chain.certificates.len() {
             let is_root = matches!(chain.certificates[i].position, ChainPosition::Root);
             if is_root {
@@ -449,8 +450,7 @@ impl CertChain {
     }
 
     /// Recompute validation status from the current chain state.
-    #[cfg(feature = "network")]
-    fn compute_validation_status(&self) -> ChainValidationStatus {
+    pub fn compute_validation_status(&self) -> ChainValidationStatus {
         if self.certificates.is_empty() {
             return ChainValidationStatus::Empty;
         }

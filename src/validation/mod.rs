@@ -5,4 +5,6 @@
 pub mod chain;
 pub mod crl;
 pub mod ocsp;
+pub mod report;
 pub mod revocation;
+pub mod verifier;

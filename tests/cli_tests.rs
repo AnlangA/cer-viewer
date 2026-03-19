@@ -267,3 +267,54 @@ fn test_cli_pem_export_field() {
     assert!(stdout.contains("-----BEGIN CERTIFICATE-----"));
     assert!(stdout.contains("-----END CERTIFICATE-----"));
 }
+
+#[test]
+fn test_cli_verify_json_output() {
+    let cert_path = asset_path("baidu.com.pem");
+    if !cert_path.exists() {
+        return;
+    }
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "verify",
+            "--format",
+            "json",
+            cert_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Skip any ANSI-escaped log lines at the start (tracing output)
+    let json_start = stdout.find('{').unwrap_or(0);
+    let json_str = &stdout[json_start..];
+    // Should be valid JSON
+    let parsed: serde_json::Value =
+        serde_json::from_str(json_str.trim()).expect("output should be valid JSON");
+    assert!(parsed.get("overall_status").is_some());
+    assert!(parsed.get("certificates").is_some());
+    let certs = parsed["certificates"].as_array().unwrap();
+    assert!(!certs.is_empty());
+}
+
+#[test]
+fn test_cli_verify_chain() {
+    let cert_path = std::path::PathBuf::from("tests/fixtures/certificates/valid/chain.pem");
+    if !cert_path.exists() {
+        return;
+    }
+
+    let output = Command::new("cargo")
+        .args(["run", "--", "verify", cert_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Certificate Verification Report"));
+    assert!(stdout.contains("Chain verification:"));
+}

@@ -5,7 +5,9 @@
 
 mod cert;
 mod cli;
+mod config;
 mod document;
+mod generation;
 mod theme;
 mod ui;
 
@@ -42,9 +44,11 @@ fn main() -> eframe::Result<()> {
 
     info!("Starting cer-viewer");
 
+    let config = config::Config::load();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 700.0])
+            .with_inner_size([config.window_width, config.window_height])
             .with_min_inner_size([600.0, 400.0])
             .with_title("Certificate Viewer"),
         ..Default::default()

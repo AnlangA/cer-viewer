@@ -70,6 +70,13 @@ secrecy = { version = "0.10", features = ["serde"] }
 # Serialization (for future features)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+colored = "3.1.1"
+directories = "6.0.0"
+rcgen = { version = "0.14.7", features = ["aws_lc_rs"] }
+comfy-table = "7.2.2"
+rustls-native-certs = "0.8.3"
+time = "0.3.41"
+rand = "0.9.2"
 
 [features]
 default = ["pkcs12", "private-keys", "network"]
@@ -83,6 +90,11 @@ private-keys = ["dep:sec1", "dep:spki", "dep:pkcs8"]
 full-formats = ["pkcs12", "private-keys"]
 
 [dev-dependencies]
+criterion = { version = "0.7.0", features = ["html_reports"] }
+
+[[bench]]
+name = "parsing"
+harness = false
 
 # Release profile optimizations
 [profile.release]

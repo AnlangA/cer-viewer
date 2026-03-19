@@ -32,6 +32,18 @@ pub fn to_der(data: &[u8]) -> Vec<u8> {
     data.to_vec()
 }
 
+/// Export a full certificate chain as PEM, concatenating all certificates.
+///
+/// Each certificate is emitted as a separate `-----BEGIN/END CERTIFICATE-----` block.
+#[allow(dead_code)]
+pub fn export_chain_as_pem(certs: &[crate::cert::ParsedCert]) -> String {
+    let mut pem = String::new();
+    for cert in certs {
+        pem.push_str(&to_pem("CERTIFICATE", &cert.raw_der));
+    }
+    pem
+}
+
 /// Convert PEM to DER (extract base64 content).
 pub fn pem_to_der(pem_data: &[u8]) -> Result<Vec<u8>> {
     let content = std::str::from_utf8(pem_data).map_err(|e| {
@@ -123,5 +135,39 @@ mod tests {
         assert!(!der.is_empty());
         // The actual certificate should parse correctly
         assert!(der.len() > 500); // Real certificates are larger
+    }
+
+    #[test]
+    fn test_export_chain_as_pem_single() {
+        let pem_data = include_bytes!("../../assets/baidu.com.pem");
+        let cert = crate::cert::parse_pem_certificate(pem_data).unwrap();
+        let expected_der = cert.raw_der.clone();
+        let output = export_chain_as_pem(&[cert]);
+        assert!(output.contains("-----BEGIN CERTIFICATE-----"));
+        assert!(output.contains("-----END CERTIFICATE-----"));
+        // Should parse back as a certificate with the same content
+        let parsed = crate::cert::parse_pem_certificate(output.as_bytes()).unwrap();
+        assert!(
+            parsed.subject.contains("baidu"),
+            "Subject should contain baidu"
+        );
+        assert_eq!(parsed.raw_der, expected_der);
+    }
+
+    #[test]
+    fn test_export_chain_as_pem_empty() {
+        let output = export_chain_as_pem(&[]);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_export_chain_as_pem_multiple() {
+        // Load the same cert twice to simulate a chain
+        let pem_data = include_bytes!("../../assets/baidu.com.pem");
+        let cert = crate::cert::parse_pem_certificate(pem_data).unwrap();
+        let output = export_chain_as_pem(&[cert.clone(), cert]);
+        // Should have two PEM blocks
+        let count = output.matches("-----BEGIN CERTIFICATE-----").count();
+        assert_eq!(count, 2);
     }
 }

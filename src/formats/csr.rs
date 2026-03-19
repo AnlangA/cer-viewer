@@ -59,19 +59,7 @@ pub struct ParsedCsr {
 impl ParsedCsr {
     /// Export this CSR as a PEM-encoded string.
     pub fn to_pem(&self) -> String {
-        use base64::prelude::*;
-
-        let b64 = BASE64_STANDARD.encode(&self.raw_der);
-        let mut pem = String::with_capacity(b64.len() + 64);
-        pem.push_str("-----BEGIN CERTIFICATE REQUEST-----\n");
-
-        for chunk in b64.as_bytes().chunks(64) {
-            pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
-            pem.push('\n');
-        }
-
-        pem.push_str("-----END CERTIFICATE REQUEST-----\n");
-        pem
+        crate::export::to_pem("CERTIFICATE REQUEST", &self.raw_der)
     }
 }
 

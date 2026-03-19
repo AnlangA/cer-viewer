@@ -292,11 +292,15 @@ impl CertChain {
 
     /// Complete the chain by downloading missing issuer certificates from AIA URLs.
     ///
-    /// Follows the chain from the last certificate upward, downloading each missing
-    /// issuer until a root (self-signed) certificate is reached or no AIA URL is available.
+    /// Follows the chain from the last certificate upward, checking the local cache
+    /// first, then downloading each missing issuer until a root (self-signed)
+    /// certificate is reached or no AIA URL is available.
     /// After completion, performs cryptographic signature verification on each link.
+    /// Downloaded certificates are saved to the local cache for future use.
     #[cfg(feature = "network")]
     pub fn complete_chain(mut self) -> Self {
+        use crate::cert::chain_cache::ChainCache;
+
         let max_depth = 10;
         let mut depth = 0;
         let mut seen: HashSet<Vec<u8>> = self
@@ -304,6 +308,8 @@ impl CertChain {
             .iter()
             .map(|cc| cc.cert.raw_der.clone())
             .collect();
+
+        let cache = ChainCache::new();
 
         while depth < max_depth {
             let last = match self.certificates.last() {
@@ -315,52 +321,74 @@ impl CertChain {
                 break;
             }
 
-            let url = match Self::extract_ca_issuers_url(&last.cert) {
-                Some(u) => u,
-                None => {
-                    let msg = format!("No AIA CA Issuers URL for {}", last.cert.display_name);
-                    info!("{}", msg);
-                    self.completion_error = Some(msg);
-                    break;
-                }
-            };
+            // Try local cache first before downloading
+            let parsed = {
+                let cached = cache.lookup_by_subject(&last.cert.issuer);
+                let cached_match = cached
+                    .into_iter()
+                    .find(|c| !seen.contains(&c.raw_der) && c.subject == last.cert.issuer);
 
-            match download_certificate(&url) {
-                Ok(parsed) => {
-                    if seen.contains(&parsed.raw_der) {
-                        info!("Duplicate certificate from {}, stopping", url);
-                        break;
-                    }
-                    seen.insert(parsed.raw_der.clone());
-                    info!(
-                        "Downloaded issuer certificate: {} from {}",
-                        parsed.display_name, url
-                    );
-
-                    let position = if Self::is_self_signed(&parsed) {
-                        ChainPosition::Root
-                    } else {
-                        ChainPosition::Intermediate {
-                            depth: self.certificates.len(),
+                if let Some(cert) = cached_match {
+                    info!("Cache hit for issuer: {}", cert.display_name);
+                    Some(cert)
+                } else {
+                    // Fall back to downloading from AIA URL
+                    let url = match Self::extract_ca_issuers_url(&last.cert) {
+                        Some(u) => u,
+                        None => {
+                            let msg =
+                                format!("No AIA CA Issuers URL for {}", last.cert.display_name);
+                            info!("{}", msg);
+                            self.completion_error = Some(msg);
+                            break;
                         }
                     };
 
-                    self.certificates.push(ChainCert {
-                        cert: parsed,
-                        position,
-                        signature_status: SignatureStatus::Unknown,
-                    });
-
-                    if matches!(position, ChainPosition::Root) {
-                        break;
+                    match download_certificate(&url) {
+                        Ok(p) => {
+                            if let Err(e) = cache.save(&p) {
+                                warn!("Failed to cache certificate: {}", e);
+                            }
+                            Some(p)
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to download from {}: {}", url, e);
+                            warn!("{}", msg);
+                            self.completion_error = Some(msg);
+                            break;
+                        }
                     }
                 }
-                Err(e) => {
-                    let msg = format!("Failed to download from {}: {}", url, e);
-                    warn!("{}", msg);
-                    self.completion_error = Some(msg);
-                    break;
+            };
+
+            let parsed = match parsed {
+                Some(p) => p,
+                None => break,
+            };
+
+            if seen.contains(&parsed.raw_der) {
+                info!("Duplicate certificate, stopping");
+                break;
+            }
+            seen.insert(parsed.raw_der.clone());
+            info!("Added issuer certificate: {}", parsed.display_name);
+
+            let position = if Self::is_self_signed(&parsed) {
+                ChainPosition::Root
+            } else {
+                ChainPosition::Intermediate {
+                    depth: self.certificates.len(),
                 }
+            };
+
+            self.certificates.push(ChainCert {
+                cert: parsed,
+                position,
+                signature_status: SignatureStatus::Unknown,
+            });
+
+            if matches!(position, ChainPosition::Root) {
+                break;
             }
 
             depth += 1;

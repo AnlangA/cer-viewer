@@ -2,15 +2,16 @@
 
 use std::path::PathBuf;
 
+/// Helper to get the absolute path to an asset file.
+fn asset_path(relative: &str) -> PathBuf {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(manifest_dir).join(relative)
+}
+
 /// Test that we can load and parse a certificate from the assets.
 #[test]
 fn test_load_baidu_certificate() {
-    let cert_path = PathBuf::from("assets/baidu.com.pem");
-    if !cert_path.exists() {
-        println!("Skipping test: {} not found", cert_path.display());
-        return;
-    }
-
+    let cert_path = asset_path("assets/baidu.com.pem");
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
     let result = cer_viewer::cert::parse_certificate(&data);
 
@@ -29,12 +30,7 @@ fn test_load_baidu_certificate() {
 /// Test that we can parse multiple certificates from a PEM file.
 #[test]
 fn test_parse_multiple_certificates() {
-    let cert_path = PathBuf::from("assets/baidu.com.pem");
-    if !cert_path.exists() {
-        println!("Skipping test: {} not found", cert_path.display());
-        return;
-    }
-
+    let cert_path = asset_path("assets/baidu.com.pem");
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
     let results = cer_viewer::cert::parse_certificates(&data);
 
@@ -53,20 +49,14 @@ fn test_parse_multiple_certificates() {
 /// Test certificate chain building.
 #[test]
 fn test_certificate_chain_building() {
-    let cert_path = PathBuf::from("assets/baidu.com.pem");
-    if !cert_path.exists() {
-        println!("Skipping test: {} not found", cert_path.display());
-        return;
-    }
-
+    let cert_path = asset_path("assets/baidu.com.pem");
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
     let results = cer_viewer::cert::parse_certificates(&data);
 
     let certs: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
 
     if certs.is_empty() {
-        println!("Skipping test: No valid certificates found");
-        return;
+        panic!("No valid certificates found in test asset");
     }
 
     let chain = cer_viewer::cert::CertChain::build(certs);
@@ -88,12 +78,7 @@ fn test_certificate_chain_building() {
 /// Test format detection.
 #[test]
 fn test_format_detection() {
-    let cert_path = PathBuf::from("assets/baidu.com.pem");
-    if !cert_path.exists() {
-        println!("Skipping test: {} not found", cert_path.display());
-        return;
-    }
-
+    let cert_path = asset_path("assets/baidu.com.pem");
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
 
     // Check PEM detection
@@ -107,12 +92,7 @@ fn test_format_detection() {
 /// Test fingerprint calculation.
 #[test]
 fn test_fingerprint_calculation() {
-    let cert_path = PathBuf::from("assets/baidu.com.pem");
-    if !cert_path.exists() {
-        println!("Skipping test: {} not found", cert_path.display());
-        return;
-    }
-
+    let cert_path = asset_path("assets/baidu.com.pem");
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
     let cert = cer_viewer::cert::parse_certificate(&data).expect("Failed to parse certificate");
 
@@ -129,12 +109,7 @@ fn test_fingerprint_calculation() {
 /// Test certificate validity status.
 #[test]
 fn test_validity_status() {
-    let cert_path = PathBuf::from("assets/baidu.com.pem");
-    if !cert_path.exists() {
-        println!("Skipping test: {} not found", cert_path.display());
-        return;
-    }
-
+    let cert_path = asset_path("assets/baidu.com.pem");
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
     let cert = cer_viewer::cert::parse_certificate(&data).expect("Failed to parse certificate");
 
@@ -149,12 +124,7 @@ fn test_validity_status() {
 /// Test PEM export.
 #[test]
 fn test_pem_export() {
-    let cert_path = PathBuf::from("assets/baidu.com.pem");
-    if !cert_path.exists() {
-        println!("Skipping test: {} not found", cert_path.display());
-        return;
-    }
-
+    let cert_path = asset_path("assets/baidu.com.pem");
     let data = std::fs::read(&cert_path).expect("Failed to read certificate file");
     let cert = cer_viewer::cert::parse_certificate(&data).expect("Failed to parse certificate");
 

@@ -20,10 +20,28 @@ pub struct ChainValidator {
 }
 
 impl ChainValidator {
-    /// Create a new validator that accepts any self-signed root.
+    /// Create a new validator that loads the OS-native root certificate store.
+    ///
+    /// Uses `rustls_native_certs::load_native_certs()` to read the system's
+    /// trusted CA bundle (e.g. `/etc/ssl/certs` on Linux, the Keychain on
+    /// macOS, the system certificate store on Windows).
+    ///
+    /// If loading the system store fails the error is logged and an empty
+    /// store is used, so validation falls back to accepting any self-signed
+    /// root.
     pub fn with_system_trust() -> Self {
+        let result = rustls_native_certs::load_native_certs();
+        if !result.certs.is_empty() {
+            tracing::info!("Loaded {} system root certificates", result.certs.len());
+        }
+        if !result.errors.is_empty() {
+            tracing::warn!(
+                "Errors while loading system root certificates: {:?}",
+                result.errors
+            );
+        }
         Self {
-            trusted_roots: Vec::new(),
+            trusted_roots: result.certs.into_iter().map(|c| c.to_vec()).collect(),
         }
     }
 
@@ -158,7 +176,10 @@ mod tests {
     #[test]
     fn test_validator_creation() {
         let validator = ChainValidator::with_system_trust();
-        assert!(validator.trusted_roots.is_empty());
+        // with_system_trust() loads OS-native root certificates.
+        // The list may be empty (CI containers) or contain many certs.
+        // We just verify creation succeeds without panicking.
+        let _ = &validator.trusted_roots;
     }
 
     #[test]
@@ -185,7 +206,9 @@ mod tests {
         }
 
         let root_der = load_fixture(root_path);
-        let validator = ChainValidator::with_system_trust();
+        // Use with_trusted_roots to include the test root explicitly,
+        // since with_system_trust() loads the OS store which won't contain test fixtures.
+        let validator = ChainValidator::with_trusted_roots(vec![root_der.clone()]);
         let result = validator.validate(&[root_der]);
         assert!(
             matches!(result, Ok(ValidationResult::Valid)),
@@ -211,7 +234,9 @@ mod tests {
         let leaf_der = load_fixture(leaf_path);
         let int_der = load_fixture(int_path);
 
-        let validator = ChainValidator::with_system_trust();
+        // Use with_trusted_roots to include the test intermediate as a trusted root,
+        // since with_system_trust() loads the OS store which won't contain test fixtures.
+        let validator = ChainValidator::with_trusted_roots(vec![int_der.clone()]);
         // The intermediate CA is self-signed and acts as root here.
         let result = validator.validate(&[leaf_der, int_der]);
         assert!(

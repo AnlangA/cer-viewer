@@ -4,6 +4,7 @@
 //! nodes that the UI can render as a collapsible hierarchy.
 
 mod chain;
+pub(crate) mod chain_cache;
 mod error;
 pub(crate) mod extensions;
 pub mod format;
@@ -210,20 +211,7 @@ pub struct ParsedCert {
 impl ParsedCert {
     /// Export this certificate as a PEM-encoded string.
     pub fn to_pem(&self) -> String {
-        use base64::prelude::*;
-
-        let b64 = BASE64_STANDARD.encode(&self.raw_der);
-        let mut pem = String::with_capacity(b64.len() + 64);
-        pem.push_str("-----BEGIN CERTIFICATE-----\n");
-
-        // Split base64 into 64-character lines
-        for chunk in b64.as_bytes().chunks(64) {
-            pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
-            pem.push('\n');
-        }
-
-        pem.push_str("-----END CERTIFICATE-----\n");
-        pem
+        crate::export::to_pem("CERTIFICATE", &self.raw_der)
     }
 }
 

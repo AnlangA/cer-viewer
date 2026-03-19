@@ -5,9 +5,11 @@
 
 pub mod cert;
 pub mod cli;
+pub mod config;
 pub mod document;
 pub mod export;
 pub mod formats;
+pub mod generation;
 pub mod security;
 pub mod ui;
 pub mod utils;

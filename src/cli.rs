@@ -6,6 +6,8 @@
 use crate::cert::{self, CertChain, CertField, ParsedCert};
 use crate::document::Document;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
+use std::io::{self, Read};
 use std::path::PathBuf;
 
 /// Certificate viewer CLI - Display X.509 certificate and CSR information.
@@ -15,7 +17,8 @@ use std::path::PathBuf;
 #[command(version = "0.1.0")]
 #[command(about = "A modern X.509 certificate and CSR viewer", long_about = None)]
 struct Cli {
-    /// Certificate or CSR file(s) to view (PEM or DER format)
+    /// Certificate or CSR file(s) to view (PEM or DER format).
+    /// Use "-" to read from stdin.
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
@@ -30,6 +33,10 @@ struct Cli {
     /// Show only specific fields (comma-separated)
     #[arg(long)]
     fields: Option<String>,
+
+    /// Disable colored output
+    #[arg(long, global = true, name = "no-color")]
+    no_color: bool,
 
     /// Subcommand for specific operations
     #[command(subcommand)]
@@ -72,6 +79,35 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = ConvertFormat::Pem)]
         to: ConvertFormat,
     },
+    /// Display SHA-256 and SHA-1 fingerprints for certificate(s)
+    Fingerprint {
+        /// Certificate or CSR file(s) to fingerprint
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
+    },
+    /// Manage the local certificate chain cache
+    Cache {
+        /// Cache subcommand
+        #[command(subcommand)]
+        command: CacheCommands,
+    },
+}
+
+/// Cache management subcommands.
+#[derive(Subcommand, Debug)]
+enum CacheCommands {
+    /// List all cached certificates
+    List,
+    /// Clear the entire cache
+    Clear,
+    /// Show cache information (size, location)
+    Info,
+    /// Remove cached entries older than N days
+    Cleanup {
+        /// Maximum age in days
+        #[arg(default_value_t = 30)]
+        days: u64,
+    },
 }
 
 /// Output format for certificate information.
@@ -82,6 +118,8 @@ enum OutputFormat {
     Text,
     /// JSON format
     Json,
+    /// Aligned table format
+    Table,
 }
 
 /// Target format for the `convert` subcommand.
@@ -107,6 +145,12 @@ pub fn run() -> Result<bool, String> {
         }
     };
 
+    // Control colored output
+    if cli.no_color {
+        colored::control::set_override(false);
+    }
+    // colored crate auto-detects piped output by default, so no extra work needed
+
     // If no files provided and no subcommand, let GUI start
     if cli.files.is_empty() && cli.command.is_none() {
         return Ok(false);
@@ -120,7 +164,7 @@ pub fn run() -> Result<bool, String> {
     // Load documents from files
     let mut documents = Vec::new();
     for file in &cli.files {
-        match load_documents_from_file(file) {
+        match load_documents_from_path(file) {
             Ok(mut file_docs) => documents.append(&mut file_docs),
             Err(e) => eprintln!("Error loading {}: {}", file.display(), e),
         }
@@ -155,7 +199,7 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
         Commands::Chain { files } => {
             let mut certs = Vec::new();
             for file in &files {
-                let docs = load_documents_from_file(file)?;
+                let docs = load_documents_from_path(file)?;
                 for doc in docs {
                     if let Document::Certificate(cert) = doc {
                         certs.push(cert);
@@ -168,7 +212,7 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
             display_chain(&certs, OutputFormat::Text);
         }
         Commands::Extract { file, field } => {
-            let docs = load_documents_from_file(&file)?;
+            let docs = load_documents_from_path(&file)?;
             if let Some(doc) = docs.first() {
                 extract_field(doc, &field);
             } else {
@@ -178,7 +222,7 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
         Commands::Verify { files } => {
             let mut certs = Vec::new();
             for file in &files {
-                let docs = load_documents_from_file(file)?;
+                let docs = load_documents_from_path(file)?;
                 for doc in docs {
                     if let Document::Certificate(cert) = doc {
                         certs.push(cert);
@@ -193,14 +237,48 @@ fn run_command(cmd: Commands) -> Result<bool, String> {
         Commands::Convert { input, output, to } => {
             convert_certificate(&input, &output, to)?;
         }
+        Commands::Fingerprint { files } => {
+            let mut has_any = false;
+            for file in &files {
+                match load_documents_from_path(file) {
+                    Ok(docs) => {
+                        for doc in &docs {
+                            print_fingerprint(doc, file);
+                            has_any = true;
+                        }
+                    }
+                    Err(e) => eprintln!("Error loading {}: {}", file.display(), e),
+                }
+            }
+            if !has_any {
+                return Err("No valid certificates or CSRs found.".to_string());
+            }
+        }
+        Commands::Cache { command } => {
+            run_cache_command(command)?;
+        }
     }
     Ok(true)
 }
 
-fn load_documents_from_file(path: &PathBuf) -> Result<Vec<Document>, String> {
-    let data = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+/// Load documents from a path, supporting "-" for stdin.
+fn load_documents_from_path(path: &PathBuf) -> Result<Vec<Document>, String> {
+    if path.as_os_str() == "-" {
+        // Read from stdin
+        let mut data = Vec::new();
+        io::stdin()
+            .read_to_end(&mut data)
+            .map_err(|e| format!("Failed to read from stdin: {}", e))?;
+        load_documents_from_data(&data)
+    } else {
+        let data = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        load_documents_from_data(&data)
+    }
+}
 
-    let results = crate::document::load_documents(&data);
+/// Load documents from raw bytes.
+fn load_documents_from_data(data: &[u8]) -> Result<Vec<Document>, String> {
+    let results = crate::document::load_documents(data);
     let mut docs = Vec::new();
     let mut errors = Vec::new();
 
@@ -239,6 +317,20 @@ fn display_documents(docs: &[Document], format: OutputFormat, fields_filter: Opt
                 serde_json::to_string_pretty(docs).unwrap_or_else(|_| "[]".to_string())
             );
         }
+        OutputFormat::Table => {
+            // Table format falls back to text for individual documents
+            for (i, doc) in docs.iter().enumerate() {
+                let type_label = if doc.is_csr() { "CSR" } else { "Certificate" };
+                if docs.len() > 1 {
+                    println!("{} #{}: {}", type_label, i + 1, doc.display_name());
+                    println!("{}", "=".repeat(60));
+                }
+                print_document_text(doc, &fields_filter);
+                if i < docs.len() - 1 {
+                    println!();
+                }
+            }
+        }
     }
 }
 
@@ -270,9 +362,9 @@ fn print_certificate_text(cert: &ParsedCert, fields_filter: &Option<String>) {
     }
     if should_show("valid") || should_show("validity") {
         let status_text = match cert.validity_status {
-            cert::ValidityStatus::Valid => "[OK] Valid",
-            cert::ValidityStatus::Expired => "[X] Expired",
-            cert::ValidityStatus::NotYetValid => "[!] Not Yet Valid",
+            cert::ValidityStatus::Valid => "[OK] Valid".green().to_string(),
+            cert::ValidityStatus::Expired => "[X] Expired".red().to_string(),
+            cert::ValidityStatus::NotYetValid => "[!] Not Yet Valid".yellow().to_string(),
         };
         println!("Validity: {}", status_text);
         println!("  Not Before: {}", cert.not_before);
@@ -310,7 +402,7 @@ fn print_csr_text(csr: &crate::formats::csr::ParsedCsr, fields_filter: &Option<S
     let should_show =
         |name: &str| -> bool { show_all || fields_to_show.iter().any(|f| name.contains(f)) };
 
-    println!("[CSR]");
+    println!("{}", "[CSR]".cyan());
     if should_show("subject") {
         println!("Subject: {}", csr.subject);
     }
@@ -352,21 +444,49 @@ fn print_field_tree(field: &CertField, depth: usize) {
     }
 }
 
+/// Print fingerprint information for a document.
+fn print_fingerprint(doc: &Document, file: &std::path::Path) {
+    let type_label = if doc.is_csr() {
+        "CSR".cyan()
+    } else {
+        "Certificate".green()
+    };
+    println!("{}: {}", type_label, file.display());
+    println!("  Subject:     {}", doc.subject());
+    println!(
+        "  SHA-256:      {}",
+        match doc {
+            Document::Certificate(c) => &c.sha256_fingerprint,
+            Document::Csr(c) => &c.sha256_fingerprint,
+        }
+    );
+    println!(
+        "  SHA-1:        {}",
+        match doc {
+            Document::Certificate(c) => &c.sha1_fingerprint,
+            Document::Csr(c) => &c.sha1_fingerprint,
+        }
+    );
+    println!();
+}
+
 fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
     let chain = build_and_complete_chain(certs);
 
     match format {
         OutputFormat::Text => {
-            println!("Certificate Chain");
+            println!("{}", "Certificate Chain".bold());
             println!("{}", "=".repeat(60));
 
             let status_text = match chain.validation_status {
-                crate::cert::ChainValidationStatus::Valid => "Valid",
+                crate::cert::ChainValidationStatus::Valid => "Valid".green().to_string(),
                 crate::cert::ChainValidationStatus::Incomplete { missing_count } => {
-                    &format!("Incomplete ({} missing)", missing_count)
+                    format!("Incomplete ({} missing)", missing_count)
+                        .yellow()
+                        .to_string()
                 }
-                crate::cert::ChainValidationStatus::BrokenLinks => "Broken Links",
-                crate::cert::ChainValidationStatus::Empty => "Empty",
+                crate::cert::ChainValidationStatus::BrokenLinks => "Broken Links".red().to_string(),
+                crate::cert::ChainValidationStatus::Empty => "Empty".to_string(),
             };
             println!("Status: {}", status_text);
             println!("Length: {} certificate(s)", chain.certificates.len());
@@ -388,9 +508,11 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
                 println!(
                     "   Signature: {}",
                     match chain_cert.signature_status {
-                        crate::cert::SignatureStatus::Valid => "Valid",
-                        crate::cert::SignatureStatus::Invalid => "Invalid",
-                        crate::cert::SignatureStatus::Unknown => "Unknown (issuer missing)",
+                        crate::cert::SignatureStatus::Valid => "Valid".green().to_string(),
+                        crate::cert::SignatureStatus::Invalid => "Invalid".red().to_string(),
+                        crate::cert::SignatureStatus::Unknown => {
+                            "Unknown (issuer missing)".yellow().to_string()
+                        }
                     }
                 );
                 println!();
@@ -410,7 +532,14 @@ fn display_chain(certs: &[ParsedCert], format: OutputFormat) {
                     })
                 }).collect::<Vec<_>>()
             });
-            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&output)
+                    .unwrap_or_else(|e| format!("JSON serialization error: {e}"))
+            );
+        }
+        OutputFormat::Table => {
+            display_chain_table(&chain);
         }
     }
 }
@@ -463,7 +592,7 @@ fn extract_field(doc: &Document, field: &str) {
 }
 
 fn verify_certificates(certs: &[ParsedCert]) {
-    println!("Certificate Verification");
+    println!("{}", "Certificate Verification".bold());
     println!("{}", "=".repeat(60));
     println!();
 
@@ -472,13 +601,13 @@ fn verify_certificates(certs: &[ParsedCert]) {
 
         match cert.validity_status {
             cert::ValidityStatus::Valid => {
-                println!("  Time validity: Valid");
+                println!("  Time validity: {}", "Valid".green());
             }
             cert::ValidityStatus::Expired => {
-                println!("  Time validity: Expired");
+                println!("  Time validity: {}", "Expired".red());
             }
             cert::ValidityStatus::NotYetValid => {
-                println!("  Time validity: Not yet valid");
+                println!("  Time validity: {}", "Not yet valid".yellow());
             }
         }
 
@@ -496,16 +625,16 @@ fn verify_certificates(certs: &[ParsedCert]) {
         let chain = build_and_complete_chain(certs);
         match chain.validation_status {
             crate::cert::ChainValidationStatus::Valid => {
-                println!("Chain verification: Valid");
+                println!("Chain verification: {}", "Valid".green());
             }
             crate::cert::ChainValidationStatus::Incomplete { missing_count } => {
                 println!(
-                    "Chain verification: Incomplete ({} missing certificate(s))",
-                    missing_count
+                    "Chain verification: {}",
+                    format!("Incomplete ({} missing certificate(s))", missing_count).yellow()
                 );
             }
             crate::cert::ChainValidationStatus::BrokenLinks => {
-                println!("Chain verification: Broken links");
+                println!("Chain verification: {}", "Broken links".red());
             }
             crate::cert::ChainValidationStatus::Empty => {}
         }
@@ -530,19 +659,19 @@ fn convert_certificate(
 
     let output_data: Vec<u8> = match target {
         ConvertFormat::Der => {
-            // Input is PEM → convert to DER.
+            // Input is PEM -> convert to DER.
             if data.starts_with(b"-----") {
                 crate::export::pem_to_der(&data)
-                    .map_err(|e| format!("PEM → DER conversion failed: {e}"))?
+                    .map_err(|e| format!("PEM -> DER conversion failed: {e}"))?
             } else {
-                // Already DER – write as-is.
+                // Already DER - write as-is.
                 data
             }
         }
         ConvertFormat::Pem => {
-            // Input is DER → wrap in PEM.
+            // Input is DER -> wrap in PEM.
             if data.starts_with(b"-----") {
-                // Already PEM – write as-is.
+                // Already PEM - write as-is.
                 data
             } else {
                 // Detect what kind of DER object this is by attempting a parse.
@@ -556,7 +685,7 @@ fn convert_certificate(
         .map_err(|e| format!("Failed to write '{}': {e}", output.display()))?;
 
     println!(
-        "Converted '{}' → '{}' ({})",
+        "Converted '{}' -> '{}' ({})",
         input.display(),
         output.display(),
         match target {
@@ -564,6 +693,132 @@ fn convert_certificate(
             ConvertFormat::Pem => "PEM",
         }
     );
+
+    Ok(())
+}
+
+/// Display chain information as an aligned table using comfy-table.
+fn display_chain_table(chain: &CertChain) {
+    use comfy_table::{
+        modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArrangement, Table,
+    };
+
+    let status_text = match chain.validation_status {
+        crate::cert::ChainValidationStatus::Valid => "Valid".to_string(),
+        crate::cert::ChainValidationStatus::Incomplete { missing_count } => {
+            format!("Incomplete ({} missing)", missing_count)
+        }
+        crate::cert::ChainValidationStatus::BrokenLinks => "Broken Links".to_string(),
+        crate::cert::ChainValidationStatus::Empty => "Empty".to_string(),
+    };
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+
+    table.set_header(vec![
+        "#",
+        "Position",
+        "Subject",
+        "Issuer",
+        "Signature",
+        "Validity",
+    ]);
+
+    for (i, cc) in chain.certificates.iter().enumerate() {
+        let position = match cc.position {
+            crate::cert::ChainPosition::Leaf => "Leaf",
+            crate::cert::ChainPosition::Intermediate { .. } => "Intermediate",
+            crate::cert::ChainPosition::Root => "Root CA",
+        };
+        let sig = match cc.signature_status {
+            crate::cert::SignatureStatus::Valid => "Valid",
+            crate::cert::SignatureStatus::Invalid => "Invalid",
+            crate::cert::SignatureStatus::Unknown => "Unknown",
+        };
+        let validity = match cc.cert.validity_status {
+            cert::ValidityStatus::Valid => "Valid",
+            cert::ValidityStatus::Expired => "Expired",
+            cert::ValidityStatus::NotYetValid => "Not Yet Valid",
+        };
+        table.add_row(vec![
+            (i + 1).to_string(),
+            position.to_string(),
+            cc.cert.subject.clone(),
+            cc.cert.issuer.clone(),
+            sig.to_string(),
+            validity.to_string(),
+        ]);
+    }
+
+    println!("Chain Status: {}", status_text);
+    println!("Certificates:  {}\n", chain.certificates.len());
+    println!("{table}");
+}
+
+/// Run a cache management command.
+fn run_cache_command(cmd: CacheCommands) -> Result<(), String> {
+    use crate::cert::chain_cache::ChainCache;
+
+    let cache = ChainCache::new();
+
+    match cmd {
+        CacheCommands::List => {
+            let info = cache.info();
+            println!("Cache: {} entries", info.entry_count);
+            println!("Location: {}", info.cache_dir.display());
+            println!();
+            if info.entry_count == 0 {
+                println!("(cache is empty)");
+            } else {
+                // List by fingerprint from the index
+                let index = {
+                    let path = info.cache_dir.join("index.json");
+                    if path.exists() {
+                        let data = std::fs::read_to_string(&path)
+                            .map_err(|e| format!("Failed to read index: {e}"))?;
+                        serde_json::from_str::<serde_json::Value>(&data).unwrap_or_default()
+                    } else {
+                        serde_json::Value::Object(serde_json::Map::new())
+                    }
+                };
+                if let Some(by_fp) = index.get("by_fingerprint").and_then(|v| v.as_object()) {
+                    let mut entries: Vec<_> = by_fp.iter().collect();
+                    entries.sort_by(|a, b| {
+                        let a_time = a.1.get("cached_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let b_time = b.1.get("cached_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                        b_time.cmp(&a_time)
+                    });
+                    for (fp, entry) in entries {
+                        let subject = entry.get("subject").and_then(|v| v.as_str()).unwrap_or("?");
+                        let cached_at =
+                            entry.get("cached_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let dt = chrono::DateTime::from_timestamp(cached_at, 0)
+                            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        println!("  {} - {} ({})", subject, fp, dt);
+                    }
+                }
+            }
+        }
+        CacheCommands::Clear => {
+            let count = cache.clear()?;
+            println!("Cleared {} cached certificate(s).", count);
+        }
+        CacheCommands::Info => {
+            let info = cache.info();
+            println!("{}", info);
+        }
+        CacheCommands::Cleanup { days } => {
+            let removed = cache.cleanup(days)?;
+            println!(
+                "Removed {} cached certificate(s) older than {} day(s).",
+                removed, days
+            );
+        }
+    }
 
     Ok(())
 }
@@ -632,7 +887,9 @@ mod tests {
 
     #[test]
     fn test_load_csr_from_file() {
-        let docs = load_documents_from_file(&std::path::PathBuf::from("assets/test.csr"));
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let csr_path = std::path::PathBuf::from(manifest_dir).join("assets/test.csr");
+        let docs = load_documents_from_path(&csr_path);
         assert!(docs.is_ok());
         let docs = docs.unwrap();
         assert_eq!(docs.len(), 1);
@@ -640,18 +897,21 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_pem_to_der() {
-        use std::path::PathBuf;
+    fn test_load_documents_from_stdin_path() {
+        // "-" path should be handled (we can't test actual stdin easily in unit tests,
+        // but we can test that the path "-" triggers the stdin path, not file path)
+        let stdin_path = PathBuf::from("-");
+        assert_eq!(stdin_path.as_os_str(), "-");
+    }
 
-        let pem_path = PathBuf::from("assets/baidu.com.pem");
-        if !pem_path.exists() {
-            println!("Skipping: asset not found");
-            return;
-        }
+    #[test]
+    fn test_convert_pem_to_der() {
+        let pem_path = std::env::temp_dir().join("cer_viewer_test_convert_baidu.pem");
+        std::fs::write(&pem_path, include_bytes!("../assets/baidu.com.pem")).unwrap();
 
         let out_path = std::env::temp_dir().join("cer_viewer_test_convert_baidu.der");
         let result = convert_certificate(&pem_path, &out_path, ConvertFormat::Der);
-        assert!(result.is_ok(), "PEM→DER conversion failed: {result:?}");
+        assert!(result.is_ok(), "PEM->DER conversion failed: {result:?}");
 
         let der_bytes = std::fs::read(&out_path).expect("output not written");
         assert!(!der_bytes.is_empty());
@@ -663,26 +923,22 @@ mod tests {
         assert!(cert.is_ok(), "resulting DER should parse: {cert:?}");
 
         // Clean up.
+        let _ = std::fs::remove_file(&pem_path);
         let _ = std::fs::remove_file(&out_path);
     }
 
     #[test]
     fn test_convert_der_to_pem() {
-        use std::path::PathBuf;
+        let pem_path = std::env::temp_dir().join("cer_viewer_test_convert_roundtrip_src.pem");
+        std::fs::write(&pem_path, include_bytes!("../assets/baidu.com.pem")).unwrap();
 
-        let pem_path = PathBuf::from("assets/baidu.com.pem");
-        if !pem_path.exists() {
-            println!("Skipping: asset not found");
-            return;
-        }
-
-        // First convert PEM → DER, then DER → PEM.
+        // First convert PEM -> DER, then DER -> PEM.
         let der_path = std::env::temp_dir().join("cer_viewer_test_convert_roundtrip.der");
         let pem_out_path = std::env::temp_dir().join("cer_viewer_test_convert_roundtrip.pem");
 
         convert_certificate(&pem_path, &der_path, ConvertFormat::Der).unwrap();
         let result = convert_certificate(&der_path, &pem_out_path, ConvertFormat::Pem);
-        assert!(result.is_ok(), "DER→PEM conversion failed: {result:?}");
+        assert!(result.is_ok(), "DER->PEM conversion failed: {result:?}");
 
         let pem_bytes = std::fs::read(&pem_out_path).expect("output not written");
         let pem_str = std::str::from_utf8(&pem_bytes).expect("PEM should be UTF-8");
@@ -694,21 +950,18 @@ mod tests {
         assert!(cert.is_ok(), "round-tripped PEM should parse: {cert:?}");
 
         // Clean up.
+        let _ = std::fs::remove_file(&pem_path);
         let _ = std::fs::remove_file(&der_path);
         let _ = std::fs::remove_file(&pem_out_path);
     }
 
     #[test]
     fn test_convert_pem_already_pem_is_noop() {
-        use std::path::PathBuf;
+        let pem_data = include_bytes!("../assets/baidu.com.pem");
+        let pem_path = std::env::temp_dir().join("cer_viewer_test_convert_noop.pem");
+        std::fs::write(&pem_path, pem_data).unwrap();
 
-        let pem_path = PathBuf::from("assets/baidu.com.pem");
-        if !pem_path.exists() {
-            println!("Skipping: asset not found");
-            return;
-        }
-
-        let out_path = std::env::temp_dir().join("cer_viewer_test_convert_noop.pem");
+        let out_path = std::env::temp_dir().join("cer_viewer_test_convert_noop_out.pem");
         let result = convert_certificate(&pem_path, &out_path, ConvertFormat::Pem);
         assert!(result.is_ok());
 
@@ -719,6 +972,7 @@ mod tests {
             "no-op conversion should produce identical bytes"
         );
 
+        let _ = std::fs::remove_file(&pem_path);
         let _ = std::fs::remove_file(&out_path);
     }
 

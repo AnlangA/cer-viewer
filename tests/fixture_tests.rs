@@ -175,7 +175,7 @@ fn test_load_csr() {
     }
 
     let data = std::fs::read(&csr_path).expect("Failed to read CSR");
-    let csr = cer_viewer::formats::csr::ParsedCsr::from_pem(&data);
+    let csr = cer_viewer::formats::csr::parse_csr_pem(&data);
 
     assert!(csr.is_ok(), "Failed to parse CSR: {:?}", csr.err());
     let csr = csr.unwrap();

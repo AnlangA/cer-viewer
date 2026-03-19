@@ -26,6 +26,9 @@ pub const STATUS_EXPIRED: Color32 = Color32::from_rgb(255, 100, 100);
 // Special indicator color for valid leaf certificates in tabs
 pub const LEAF_INDICATOR: Color32 = Color32::from_rgb(255, 200, 80);
 
+// CSR tab indicator color
+pub const CSR_INDICATOR: Color32 = Color32::from_rgb(100, 180, 255);
+
 // Banner colors
 pub const BANNER_INFO_BG: Color32 = Color32::from_rgb(30, 80, 50);
 pub const BANNER_INFO_TEXT: Color32 = Color32::from_rgb(120, 255, 180);

@@ -5,6 +5,7 @@
 
 mod cert;
 mod cli;
+mod document;
 mod theme;
 mod ui;
 

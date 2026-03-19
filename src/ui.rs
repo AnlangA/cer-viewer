@@ -3,7 +3,8 @@
 //! Contains the [`CertViewerApp`] struct that implements [`eframe::App`],
 //! plus helpers for drawing the certificate field tree.
 
-use crate::cert::{self, CertChain, CertField, CertId, ParsedCert, ValidityStatus};
+use crate::cert::{self, CertChain, CertField, ParsedCert, ValidityStatus};
+use crate::document::{self, Document};
 use crate::security::{is_potentially_sensitive, sensitive_copy_warning, SensitiveDataType};
 use crate::theme;
 use egui::{
@@ -44,11 +45,11 @@ enum ViewMode {
 
 /// Main application state for the certificate viewer.
 pub struct CertViewerApp {
-    /// Currently loaded certificates (maintains insertion order).
-    certs: Vec<ParsedCert>,
-    /// Map from certificate ID to index for O(1) lookup.
-    cert_index: HashMap<CertId, usize>,
-    /// Index of the selected certificate tab.
+    /// Currently loaded documents (certificates and CSRs, maintains insertion order).
+    documents: Vec<Document>,
+    /// Map from document ID string to index for O(1) dedup lookup.
+    doc_index: HashMap<String, usize>,
+    /// Index of the selected tab.
     selected_tab: usize,
     /// Current view mode (details or chain).
     view_mode: ViewMode,
@@ -75,7 +76,7 @@ pub struct CertViewerApp {
 }
 
 impl CertViewerApp {
-    /// Create a new application with no certificates loaded.
+    /// Create a new application with no documents loaded.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self::setup_chinese_fonts(&cc.egui_ctx);
 
@@ -88,8 +89,8 @@ impl CertViewerApp {
         };
 
         Self {
-            certs: Vec::new(),
-            cert_index: HashMap::new(),
+            documents: Vec::new(),
+            doc_index: HashMap::new(),
             selected_tab: 0,
             view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
@@ -133,45 +134,54 @@ impl CertViewerApp {
         ctx.set_fonts(fonts);
     }
 
-    /// Load a certificate from raw bytes (auto-detects PEM/DER).
-    /// Returns true if the certificate was loaded, false if it already existed.
+    /// Load a document from raw bytes (auto-detects PEM/DER).
+    /// Returns true if any new document was loaded.
     #[allow(dead_code)]
     pub fn load_certificate_bytes(&mut self, data: &[u8]) -> bool {
-        match cert::parse_certificate(data) {
-            Ok(parsed) => {
-                if let Some(existing_idx) = self.find_certificate_by_id(&parsed.id) {
-                    info!(id = %parsed.id, "Certificate already loaded, switching to tab");
-                    self.selected_tab = existing_idx;
-                    self.show_info(format!(
-                        "Certificate already loaded: {}",
-                        parsed.display_name
-                    ));
-                    return false;
-                }
+        let results = document::load_documents(data);
+        let mut loaded = false;
 
-                info!(name = %parsed.display_name, "Certificate loaded");
-                self.error_msgs.clear();
-                self.invalidate_chain_cache();
-                let idx = self.certs.len();
-                self.cert_index.insert(parsed.id.clone(), idx);
-                self.certs.push(parsed);
-                self.selected_tab = idx;
-                true
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to load certificate");
-                self.error_msgs.push(e.to_string());
-                false
+        for result in &results {
+            match result {
+                Ok(doc) => {
+                    let id_str = doc.id_str().to_string();
+                    if let Some(existing_idx) = self.doc_index.get(&id_str) {
+                        info!(id = %id_str, "Document already loaded, switching to tab");
+                        self.selected_tab = *existing_idx;
+                        self.show_info(format!("Already loaded: {}", doc.display_name()));
+                        continue;
+                    }
+
+                    info!(name = %doc.display_name(), "Document loaded");
+                    if !loaded {
+                        self.error_msgs.clear();
+                    }
+                    loaded = true;
+                    let idx = self.documents.len();
+                    self.doc_index.insert(id_str, idx);
+                    self.documents.push(doc.clone());
+                    self.selected_tab = idx;
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to load document");
+                    self.error_msgs.push(e.clone());
+                }
             }
         }
+
+        if loaded {
+            self.invalidate_chain_cache();
+        }
+        loaded
     }
 
-    /// Find a certificate by its ID, returns the index if found.
-    fn find_certificate_by_id(&self, id: &CertId) -> Option<usize> {
-        self.cert_index.get(id).copied()
+    /// Find a document by its ID string, returns the index if found.
+    #[allow(dead_code)]
+    fn find_document_by_id(&self, id_str: &str) -> Option<usize> {
+        self.doc_index.get(id_str).copied()
     }
 
-    /// Load certificates from multiple files, supporting PEM certificate chains.
+    /// Load documents from multiple files, supporting PEM certificate chains and CSRs.
     fn load_files(&mut self, paths: Vec<std::path::PathBuf>) {
         let mut loaded_count = 0;
         let mut skipped_count = 0;
@@ -181,25 +191,24 @@ impl CertViewerApp {
         for path in &paths {
             match std::fs::read(path) {
                 Ok(data) => {
-                    // Use parse_certificates to support multi-cert PEM chains
-                    let results = cert::parse_certificates(&data);
+                    let results = document::load_documents(&data);
                     for result in &results {
                         match result {
-                            Ok(parsed) => {
-                                if let Some(existing_idx) = self.find_certificate_by_id(&parsed.id)
-                                {
+                            Ok(doc) => {
+                                let id_str = doc.id_str().to_string();
+                                if let Some(existing_idx) = self.doc_index.get(&id_str) {
                                     info!(
-                                        id = %parsed.id,
-                                        "Certificate already loaded from {:?}, skipping",
+                                        id = %id_str,
+                                        "Document already loaded from {:?}, skipping",
                                         path
                                     );
-                                    last_loaded_idx = Some(existing_idx);
+                                    last_loaded_idx = Some(*existing_idx);
                                     skipped_count += 1;
                                 } else {
-                                    info!(name = %parsed.display_name, "Certificate loaded from {:?}", path);
-                                    let idx = self.certs.len();
-                                    self.cert_index.insert(parsed.id.clone(), idx);
-                                    self.certs.push(parsed.clone());
+                                    info!(name = %doc.display_name(), "Document loaded from {:?}", path);
+                                    let idx = self.documents.len();
+                                    self.doc_index.insert(id_str, idx);
+                                    self.documents.push(doc.clone());
                                     last_loaded_idx = Some(idx);
                                     loaded_count += 1;
                                 }
@@ -224,13 +233,13 @@ impl CertViewerApp {
             }
         }
 
-        // Switch to the last loaded or existing certificate
+        // Switch to the last loaded or existing document
         if let Some(idx) = last_loaded_idx {
             self.selected_tab = idx;
             if loaded_count > 0 {
                 self.error_msgs.clear();
                 self.invalidate_chain_cache();
-                self.reorder_certs();
+                self.reorder_docs();
             }
         }
 
@@ -238,7 +247,7 @@ impl CertViewerApp {
         if loaded_count > 0 || skipped_count > 0 {
             let mut msg = String::new();
             if loaded_count > 0 {
-                msg.push_str(&format!("Loaded {} certificate(s)", loaded_count));
+                msg.push_str(&format!("Loaded {} document(s)", loaded_count));
             }
             if skipped_count > 0 {
                 if !msg.is_empty() {
@@ -253,11 +262,14 @@ impl CertViewerApp {
         self.error_msgs = errors;
     }
 
-    /// Open a file dialog and load the selected certificates (supports multiple selection).
+    /// Open a file dialog and load the selected files (supports multiple selection).
     fn open_file_dialog(&mut self) {
         let files = rfd::FileDialog::new()
-            .set_title("Open Certificates")
-            .add_filter("Certificates", &["pem", "crt", "cer", "der", "cert"])
+            .set_title("Open Certificates / CSRs")
+            .add_filter(
+                "Certificates & CSRs",
+                &["pem", "crt", "cer", "der", "cert", "csr"],
+            )
             .add_filter("All Files", &["*"])
             .pick_files();
 
@@ -266,123 +278,134 @@ impl CertViewerApp {
         }
     }
 
-    /// Remove a certificate at the given index.
-    fn remove_certificate(&mut self, index: usize) {
-        if index < self.certs.len() {
-            let name = self.certs[index].display_name.clone();
-            self.certs.remove(index);
+    /// Remove a document at the given index.
+    fn remove_document(&mut self, index: usize) {
+        if index < self.documents.len() {
+            let name = self.documents[index].display_name().to_string();
+            self.documents.remove(index);
 
             // Rebuild the index map since indices shifted
-            self.rebuild_cert_index();
+            self.rebuild_doc_index();
             self.invalidate_chain_cache();
-            self.reorder_certs();
+            self.reorder_docs();
 
             self.show_info(format!("Closed: {}", name));
-            if self.certs.is_empty() {
+            if self.documents.is_empty() {
                 self.selected_tab = 0;
-            } else if self.selected_tab >= self.certs.len() {
-                self.selected_tab = self.certs.len() - 1;
+            } else if self.selected_tab >= self.documents.len() {
+                self.selected_tab = self.documents.len() - 1;
             }
         }
     }
 
-    /// Clear all loaded certificates.
-    fn clear_all_certificates(&mut self) {
-        let count = self.certs.len();
-        self.certs.clear();
-        self.cert_index.clear();
+    /// Clear all loaded documents.
+    fn clear_all_documents(&mut self) {
+        let count = self.documents.len();
+        self.documents.clear();
+        self.doc_index.clear();
         self.selected_tab = 0;
         self.error_msgs.clear();
         self.invalidate_chain_cache();
-        self.show_info(format!("Cleared {} certificate(s)", count));
+        self.show_info(format!("Cleared {} document(s)", count));
     }
 
-    /// Rebuild the certificate index map after modifications.
-    fn rebuild_cert_index(&mut self) {
-        self.cert_index = self
-            .certs
+    /// Rebuild the document index map after modifications.
+    fn rebuild_doc_index(&mut self) {
+        self.doc_index = self
+            .documents
             .iter()
             .enumerate()
-            .map(|(i, cert)| (cert.id.clone(), i))
+            .map(|(i, doc)| (doc.id_str().to_string(), i))
             .collect();
     }
 
-    /// Check if a certificate is a leaf (end-entity) certificate.
-    ///
-    /// A certificate is a leaf if no other certificate in the set has it as issuer,
-    /// or if it's the only non-self-signed certificate.
+    /// Check if a certificate at the given index is a leaf (end-entity) certificate.
     fn is_leaf_cert(&self, idx: usize) -> bool {
-        if idx >= self.certs.len() {
+        if idx >= self.documents.len() {
             return false;
         }
-        let subject = &self.certs[idx].subject;
-        let is_self_signed = self.certs[idx].issuer == *subject;
+        let doc = &self.documents[idx];
+        let cert = match doc {
+            Document::Certificate(c) => c,
+            _ => return false,
+        };
+        let subject = &cert.subject;
+        let is_self_signed = cert.issuer == *subject;
         if is_self_signed {
             return false;
         }
         // Leaf = no other cert lists this cert's subject as its issuer
-        for (i, cert) in self.certs.iter().enumerate() {
-            if i != idx && cert.issuer == *subject {
-                return false;
+        for (i, other_doc) in self.documents.iter().enumerate() {
+            if i != idx {
+                if let Document::Certificate(other) = other_doc {
+                    if other.issuer == *subject {
+                        return false;
+                    }
+                }
             }
         }
         true
     }
 
-    /// Reorder certificates so leaf certs are on the left.
-    ///
-    /// Among leaf certs, preserves their original relative order.
-    /// Among non-leaf certs, preserves their original relative order.
-    /// Updates `selected_tab` to track the previously selected cert.
-    fn reorder_certs(&mut self) {
-        let selected_id = self.certs.get(self.selected_tab).map(|c| c.id.clone());
+    /// Reorder documents so leaf certs are on the left, CSRs at the end.
+    fn reorder_docs(&mut self) {
+        let selected_id = self
+            .documents
+            .get(self.selected_tab)
+            .map(|d| d.id_str().to_string());
 
-        let mut leaf_certs: Vec<ParsedCert> = Vec::new();
+        let all_docs: Vec<Document> = self.documents.drain(..).collect();
 
-        for cert in self.certs.drain(..) {
-            // Determine leaf status based on remaining certs in original set.
-            // We need to check before draining removes everything, so we use
-            // the chain logic: a cert is leaf if no other cert has it as issuer.
-            // Since we're draining in order, we check against the full set first.
-            leaf_certs.push(cert);
-        }
-
-        // Re-evaluate: check all certs against each other to determine leaf status
-        let all_certs: Vec<&ParsedCert> = leaf_certs.iter().collect();
-        let mut is_leaf_vec: Vec<bool> = Vec::with_capacity(all_certs.len());
-        for (i, cert) in all_certs.iter().enumerate() {
-            if cert.issuer == cert.subject {
-                is_leaf_vec.push(false);
-                continue;
-            }
-            let mut is_issuer = false;
-            for (j, other) in all_certs.iter().enumerate() {
-                if j != i && other.issuer == cert.subject {
-                    is_issuer = true;
-                    break;
+        // Determine leaf status for each cert document
+        let is_leaf_vec: Vec<bool> = all_docs
+            .iter()
+            .enumerate()
+            .map(|(i, doc)| {
+                let cert = match doc {
+                    Document::Certificate(c) => c,
+                    _ => return false,
+                };
+                if cert.issuer == cert.subject {
+                    return false;
                 }
-            }
-            is_leaf_vec.push(!is_issuer);
-        }
+                let mut is_issuer = false;
+                for (j, other_doc) in all_docs.iter().enumerate() {
+                    if j != i {
+                        if let Document::Certificate(other) = other_doc {
+                            if other.issuer == cert.subject {
+                                is_issuer = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                !is_issuer
+            })
+            .collect();
 
-        // Partition into leaf and non-leaf
-        let mut leafs: Vec<ParsedCert> = Vec::new();
-        let mut others: Vec<ParsedCert> = Vec::new();
-        for (cert, is_leaf) in leaf_certs.into_iter().zip(is_leaf_vec) {
-            if is_leaf {
-                leafs.push(cert);
+        // Partition: leaf certs, non-leaf certs, CSRs
+        let mut leafs: Vec<Document> = Vec::new();
+        let mut others: Vec<Document> = Vec::new();
+        let mut csrs: Vec<Document> = Vec::new();
+
+        for (doc, is_leaf) in all_docs.into_iter().zip(is_leaf_vec) {
+            if doc.is_csr() {
+                csrs.push(doc);
+            } else if is_leaf {
+                leafs.push(doc);
             } else {
-                others.push(cert);
+                others.push(doc);
             }
         }
 
-        self.certs = leafs;
-        self.certs.extend(others);
-        self.rebuild_cert_index();
+        self.documents = leafs;
+        self.documents.extend(others);
+        self.documents.extend(csrs);
+        self.rebuild_doc_index();
 
         // Restore selected tab
         if let Some(ref id) = selected_id {
-            if let Some(&new_idx) = self.cert_index.get(id) {
+            if let Some(&new_idx) = self.doc_index.get(id) {
                 self.selected_tab = new_idx;
             }
         }
@@ -394,7 +417,7 @@ impl CertViewerApp {
     }
 
     /// Invalidate the completed chain cache and start a new background chain
-    /// completion if the chain is incomplete (called when certificates change).
+    /// completion if the chain is incomplete.
     fn invalidate_chain_cache(&mut self) {
         #[cfg(feature = "network")]
         {
@@ -403,15 +426,25 @@ impl CertViewerApp {
             self.chain_completion_rx = None;
             self.chain_completion_pending = false;
 
-            if self.certs.is_empty() || self.chain_completion_pending {
+            // Only build chains from certificates (not CSRs)
+            let certs: Vec<ParsedCert> = self
+                .documents
+                .iter()
+                .filter_map(|d| match d {
+                    Document::Certificate(c) => Some(c.clone()),
+                    _ => None,
+                })
+                .collect();
+
+            if certs.is_empty() || self.chain_completion_pending {
                 return;
             }
-            let chain = CertChain::build(self.certs.clone());
+            let chain = CertChain::build(certs.clone());
             if matches!(
                 chain.validation_status,
                 cert::ChainValidationStatus::Incomplete { .. }
             ) {
-                let certs_clone = self.certs.clone();
+                let certs_clone = certs;
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.chain_completion_rx = Some(rx);
                 self.chain_completion_pending = true;
@@ -424,16 +457,22 @@ impl CertViewerApp {
         }
     }
 
+    /// Get only the certificates from loaded documents (for chain building).
+    fn get_certs(&self) -> Vec<ParsedCert> {
+        self.documents
+            .iter()
+            .filter_map(|d| match d {
+                Document::Certificate(c) => Some(c.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Copy text to clipboard using cached clipboard instance.
-    ///
-    /// This method checks if the text being copied contains sensitive data
-    /// and logs a warning if it does.
     fn copy_to_clipboard(&mut self, text: String) {
-        // Check for sensitive data before copying
         let data_type = SensitiveDataType::detect("clipboard", Some(&text));
         let is_sensitive = data_type.is_some();
 
-        // Try cached instance first
         if let Some(clipboard) = &mut self.clipboard {
             match clipboard.set_text(&text) {
                 Ok(()) => {
@@ -457,7 +496,6 @@ impl CertViewerApp {
             }
         }
 
-        // Retry with fresh instance
         match arboard::Clipboard::new() {
             Ok(mut clipboard) => match clipboard.set_text(&text) {
                 Ok(()) => {
@@ -492,12 +530,13 @@ impl CertViewerApp {
             self.open_file_dialog();
         }
 
-        if ctx.input_mut(|i| i.consume_shortcut(&CLOSE_TAB_SHORTCUT)) && !self.certs.is_empty() {
-            self.remove_certificate(self.selected_tab);
+        if ctx.input_mut(|i| i.consume_shortcut(&CLOSE_TAB_SHORTCUT)) && !self.documents.is_empty()
+        {
+            self.remove_document(self.selected_tab);
         }
     }
 
-    /// Handle drag and drop (consumes events to prevent duplicate loading).
+    /// Handle drag and drop.
     fn handle_drag_drop(&mut self, ctx: &Context) {
         let paths: Vec<std::path::PathBuf> = ctx.input_mut(|i| {
             i.raw
@@ -533,21 +572,27 @@ impl eframe::App for CertViewerApp {
                 }
             }
             if let Some(completed) = completed_chain_result {
-                let original_ids: std::collections::HashSet<CertId> =
-                    self.certs.iter().map(|c| c.id.clone()).collect();
+                let original_ids: std::collections::HashSet<cert::CertId> = self
+                    .documents
+                    .iter()
+                    .filter_map(|d| match d {
+                        Document::Certificate(c) => Some(c.id.clone()),
+                        _ => None,
+                    })
+                    .collect();
                 let new_certs = completed.downloaded_certs(&original_ids);
                 let has_new = !new_certs.is_empty();
                 for new_cert in new_certs {
-                    self.cert_index
-                        .insert(new_cert.id.clone(), self.certs.len());
-                    self.certs.push(new_cert);
+                    let idx = self.documents.len();
+                    self.doc_index.insert(new_cert.id.0.clone(), idx);
+                    self.documents.push(Document::Certificate(new_cert));
                 }
                 self.completed_chain = Some(completed);
                 self.chain_completion_rx = None;
                 self.chain_completion_pending = false;
                 if has_new {
-                    self.rebuild_cert_index();
-                    self.reorder_certs();
+                    self.rebuild_doc_index();
+                    self.reorder_docs();
                 }
             }
         }
@@ -580,12 +625,12 @@ impl eframe::App for CertViewerApp {
                         self.open_file_dialog();
                     }
 
-                    if !self.certs.is_empty() {
+                    if !self.documents.is_empty() {
                         let clear_btn =
                             egui::Button::new(RichText::new("Clear All").size(theme::FONT_BODY))
                                 .corner_radius(CornerRadius::same(4));
                         if ui.add(clear_btn).clicked() {
-                            self.clear_all_certificates();
+                            self.clear_all_documents();
                         }
                     }
 
@@ -599,27 +644,28 @@ impl eframe::App for CertViewerApp {
                     );
                 });
 
-                // Tab bar for certificates (show when at least 1 cert)
-                if !self.certs.is_empty() {
+                // Tab bar for documents
+                if !self.documents.is_empty() {
                     ui.add_space(4.0);
 
-                    let tab_data: Vec<(usize, String, bool, ValidityStatus, bool)> = self
-                        .certs
+                    let tab_data: Vec<(usize, String, bool, bool, Option<ValidityStatus>)> = self
+                        .documents
                         .iter()
                         .enumerate()
-                        .map(|(i, cert)| {
-                            let label = if cert.display_name.len() > 20 {
-                                format!("{}...", &cert.display_name[..17])
+                        .map(|(i, doc)| {
+                            let prefix = if doc.is_csr() { "[R] " } else { "[C] " };
+                            let name = doc.display_name();
+                            let label = if name.chars().count() > 20 {
+                                let truncated: String = name.chars().take(17).collect();
+                                format!("{}{}...", prefix, truncated)
                             } else {
-                                cert.display_name.clone()
+                                format!("{}{}", prefix, name)
                             };
-                            (
-                                i,
-                                label,
-                                i == self.selected_tab,
-                                cert.validity_status,
-                                self.is_leaf_cert(i),
-                            )
+                            let validity = match doc {
+                                Document::Certificate(c) => Some(c.validity_status),
+                                _ => None,
+                            };
+                            (i, label, i == self.selected_tab, doc.is_csr(), validity)
                         })
                         .collect();
 
@@ -629,7 +675,7 @@ impl eframe::App for CertViewerApp {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                for (i, label, is_selected, validity, is_leaf) in &tab_data {
+                                for (i, label, is_selected, is_csr, validity) in &tab_data {
                                     let tab_frame = Frame::new()
                                         .fill(if *is_selected {
                                             theme::BG_SECONDARY
@@ -648,10 +694,17 @@ impl eframe::App for CertViewerApp {
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
-                                            let indicator_color = if *is_leaf {
-                                                theme::LEAF_INDICATOR
+                                            // Indicator dot
+                                            let indicator_color = if *is_csr {
+                                                theme::CSR_INDICATOR
+                                            } else if let Some(validity) = validity {
+                                                if self.is_leaf_cert(*i) {
+                                                    theme::LEAF_INDICATOR
+                                                } else {
+                                                    theme::validity_color(*validity)
+                                                }
                                             } else {
-                                                theme::validity_color(*validity)
+                                                theme::TEXT_SECONDARY
                                             };
                                             ui.label(RichText::new("*").color(indicator_color));
 
@@ -686,13 +739,13 @@ impl eframe::App for CertViewerApp {
                     if let Some(act) = action {
                         match act {
                             TabAction::Select(i) => self.selected_tab = i,
-                            TabAction::Close(i) => self.remove_certificate(i),
+                            TabAction::Close(i) => self.remove_document(i),
                         }
                     }
                 }
             });
 
-        // ── Central panel: certificate content ─────────────────
+        // ── Central panel: document content ─────────────────
         egui::CentralPanel::default()
             .frame(
                 Frame::new()
@@ -730,14 +783,20 @@ impl eframe::App for CertViewerApp {
                     ui.add_space(8.0);
                 }
 
-                if self.certs.is_empty() {
+                if self.documents.is_empty() {
                     draw_empty_state(ui);
                 } else {
-                    // View mode switcher
+                    let selected_doc = self.documents.get(self.selected_tab);
+                    let has_certs_only = self
+                        .documents
+                        .iter()
+                        .all(|d| matches!(d, Document::Certificate(_)));
+
+                    // View mode switcher (only for certificates)
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("View:").color(theme::TEXT_LABEL));
                         let details_btn = egui::Button::new(
-                            RichText::new("Certificate Details").size(theme::FONT_BODY),
+                            RichText::new("Document Details").size(theme::FONT_BODY),
                         )
                         .corner_radius(CornerRadius::same(4))
                         .fill(if self.view_mode == ViewMode::Details {
@@ -757,7 +816,13 @@ impl eframe::App for CertViewerApp {
                                 } else {
                                     egui::Color32::TRANSPARENT
                                 });
-                        if ui.add(chain_btn).clicked() {
+
+                        // Disable chain view when viewing a CSR or when only CSRs are loaded
+                        let chain_enabled =
+                            has_certs_only && selected_doc.map(|d| !d.is_csr()).unwrap_or(false);
+
+                        // Only show Chain View button when viewing a certificate
+                        if chain_enabled && ui.add(chain_btn).clicked() {
                             self.view_mode = ViewMode::Chain;
                         }
                     });
@@ -765,9 +830,9 @@ impl eframe::App for CertViewerApp {
 
                     match self.view_mode {
                         ViewMode::Details => {
-                            if let Some(cert) = self.certs.get(self.selected_tab) {
+                            if let Some(doc) = selected_doc {
                                 let mut to_copy: Option<String> = None;
-                                draw_certificate(ui, cert, &mut |text| {
+                                draw_document(ui, doc, &mut |text| {
                                     to_copy = Some(text);
                                 });
 
@@ -779,31 +844,10 @@ impl eframe::App for CertViewerApp {
                         ViewMode::Chain => {
                             #[cfg(feature = "network")]
                             {
-                                // Poll background completion
-                                if let Some(ref rx) = self.chain_completion_rx {
-                                    if let Ok(completed) = rx.try_recv() {
-                                        let original_ids: std::collections::HashSet<CertId> =
-                                            self.certs.iter().map(|c| c.id.clone()).collect();
-                                        let new_certs = completed.downloaded_certs(&original_ids);
-                                        let has_new = !new_certs.is_empty();
-                                        for cert in new_certs {
-                                            self.cert_index
-                                                .insert(cert.id.clone(), self.certs.len());
-                                            self.certs.push(cert);
-                                        }
-                                        self.completed_chain = Some(completed);
-                                        self.chain_completion_rx = None;
-                                        self.chain_completion_pending = false;
-                                        if has_new {
-                                            self.rebuild_cert_index();
-                                            self.reorder_certs();
-                                        }
-                                    }
-                                }
-
+                                let certs = self.get_certs();
                                 let chain = self.completed_chain.clone().unwrap_or_else(|| {
                                     self.initial_chain
-                                        .get_or_insert_with(|| CertChain::build(self.certs.clone()))
+                                        .get_or_insert_with(|| CertChain::build(certs))
                                         .clone()
                                 });
 
@@ -823,7 +867,8 @@ impl eframe::App for CertViewerApp {
                             }
                             #[cfg(not(feature = "network"))]
                             {
-                                let chain = CertChain::build(self.certs.clone());
+                                let certs = self.get_certs();
+                                let chain = CertChain::build(certs);
                                 draw_chain(ui, &chain);
                             }
                         }
@@ -839,19 +884,19 @@ fn draw_empty_state(ui: &mut Ui) {
     ui.vertical_centered(|ui| {
         ui.add_space(80.0);
         ui.label(
-            RichText::new("No certificate loaded")
+            RichText::new("No certificate or CSR loaded")
                 .size(22.0)
                 .color(theme::TEXT_SECONDARY),
         );
         ui.add_space(12.0);
         ui.label(
-            RichText::new("Click \"Open Files...\" or drag & drop certificates here")
+            RichText::new("Click \"Open Files...\" or drag & drop certificates or CSRs here")
                 .size(14.0)
                 .color(theme::TEXT_SECONDARY),
         );
         ui.add_space(4.0);
         ui.label(
-            RichText::new("Supported formats: PEM, DER, CRT, CER")
+            RichText::new("Supported formats: PEM, DER, CRT, CER, CSR")
                 .size(12.0)
                 .color(theme::TEXT_SECONDARY),
         );
@@ -870,7 +915,18 @@ fn draw_empty_state(ui: &mut Ui) {
     });
 }
 
-// ── Certificate rendering ──────────────────────────────────────────
+// ── Document rendering ──────────────────────────────────────────────
+
+/// Draw a document (certificate or CSR) card and field tree.
+fn draw_document<F>(ui: &mut Ui, doc: &Document, on_copy: &mut F)
+where
+    F: FnMut(String),
+{
+    match doc {
+        Document::Certificate(cert) => draw_certificate(ui, cert, on_copy),
+        Document::Csr(csr) => draw_csr(ui, csr, on_copy),
+    }
+}
 
 fn draw_certificate<F>(ui: &mut Ui, cert: &ParsedCert, on_copy: &mut F)
 where
@@ -943,18 +999,82 @@ where
         });
 }
 
+fn draw_csr<F>(ui: &mut Ui, csr: &crate::formats::csr::ParsedCsr, on_copy: &mut F)
+where
+    F: FnMut(String),
+{
+    Frame::new()
+        .fill(theme::BG_SECONDARY)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::same(12))
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&csr.display_name)
+                            .size(theme::FONT_TITLE)
+                            .color(theme::TEXT_PRIMARY)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("[CSR]")
+                            .size(theme::FONT_BODY)
+                            .color(theme::CSR_INDICATOR),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new("Signature: ")
+                            .size(theme::FONT_BODY)
+                            .color(theme::TEXT_LABEL),
+                    );
+                    ui.label(
+                        RichText::new(&csr.signature_algorithm)
+                            .size(theme::FONT_BODY)
+                            .color(theme::TEXT_VALUE),
+                    );
+                });
+
+                ui.add_space(4.0);
+
+                // Quick actions
+                ui.horizontal(|ui| {
+                    let copy_btn =
+                        egui::Button::new(RichText::new("Copy PEM").size(theme::FONT_BODY))
+                            .corner_radius(CornerRadius::same(4));
+                    if ui.add(copy_btn).clicked() {
+                        on_copy(csr.to_pem());
+                    }
+                });
+            });
+        });
+
+    ui.add_space(theme::SECTION_SPACING);
+
+    ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            for field in &csr.fields {
+                draw_field(ui, field, 0, on_copy);
+            }
+        });
+}
+
 /// Draw certificate chain view.
 fn draw_chain(ui: &mut Ui, chain: &CertChain) {
     use crate::cert::ChainValidationStatus;
 
     // Chain status header
     let (status_text, status_color) = match chain.validation_status {
-        ChainValidationStatus::Valid => ("✓ Valid Chain".to_string(), egui::Color32::GREEN),
+        ChainValidationStatus::Valid => ("Valid Chain".to_string(), egui::Color32::GREEN),
         ChainValidationStatus::Incomplete { missing_count } => (
-            format!("⚠ Incomplete Chain ({} missing)", missing_count),
+            format!("Incomplete Chain ({} missing)", missing_count),
             egui::Color32::YELLOW,
         ),
-        ChainValidationStatus::BrokenLinks => ("✗ Broken Links".to_string(), egui::Color32::RED),
+        ChainValidationStatus::BrokenLinks => ("Broken Links".to_string(), egui::Color32::RED),
         ChainValidationStatus::Empty => ("Empty Chain".to_string(), egui::Color32::GRAY),
     };
 
@@ -1119,10 +1239,10 @@ fn draw_chain_cert(ui: &mut Ui, chain_cert: &crate::cert::ChainCert, index: usiz
                             .color(theme::TEXT_LABEL),
                     );
                     let (sig_text, sig_color) = match chain_cert.signature_status {
-                        SignatureStatus::Valid => ("✓ Valid", egui::Color32::GREEN),
-                        SignatureStatus::Invalid => ("✗ Invalid", egui::Color32::RED),
+                        SignatureStatus::Valid => ("Valid", egui::Color32::GREEN),
+                        SignatureStatus::Invalid => ("Invalid", egui::Color32::RED),
                         SignatureStatus::Unknown => {
-                            ("? Unknown", egui::Color32::from_rgb(200, 180, 50))
+                            ("Unknown", egui::Color32::from_rgb(200, 180, 50))
                         }
                     };
                     ui.label(
@@ -1155,7 +1275,8 @@ where
                 "Subject" => "[S]",
                 "Validity" => "[T]",
                 "Subject Public Key Info" => "[K]",
-                "Extensions" => "[X]",
+                "Extensions" | "Extension Request" => "[X]",
+                "Attributes" => "[A]",
                 "Fingerprints" => "[F]",
                 _ => "[*]",
             }
@@ -1248,7 +1369,7 @@ where
 
                     if is_sensitive {
                         ui.label(
-                            RichText::new("⚠️ Sensitive data")
+                            RichText::new("Sensitive data")
                                 .color(egui::Color32::YELLOW)
                                 .italics(),
                         );
@@ -1277,8 +1398,8 @@ mod tests {
 
     fn test_app() -> CertViewerApp {
         CertViewerApp {
-            certs: Vec::new(),
-            cert_index: HashMap::new(),
+            documents: Vec::new(),
+            doc_index: HashMap::new(),
             selected_tab: 0,
             view_mode: ViewMode::Details,
             error_msgs: Vec::new(),
@@ -1299,7 +1420,7 @@ mod tests {
     #[test]
     fn test_app_initial_state() {
         let app = test_app();
-        assert!(app.certs.is_empty());
+        assert!(app.documents.is_empty());
         assert_eq!(app.selected_tab, 0);
         assert!(app.error_msgs.is_empty());
     }
@@ -1309,7 +1430,7 @@ mod tests {
         let mut app = test_app();
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
-        assert_eq!(app.certs.len(), 1);
+        assert_eq!(app.documents.len(), 1);
         assert!(app.error_msgs.is_empty());
         assert_eq!(app.selected_tab, 0);
     }
@@ -1318,7 +1439,7 @@ mod tests {
     fn test_load_invalid_certificate_sets_error() {
         let mut app = test_app();
         app.load_certificate_bytes(b"not a certificate");
-        assert!(app.certs.is_empty());
+        assert!(app.documents.is_empty());
         assert!(!app.error_msgs.is_empty());
     }
 
@@ -1327,12 +1448,38 @@ mod tests {
         let mut app = test_app();
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
-        assert_eq!(app.certs.len(), 1);
+        assert_eq!(app.documents.len(), 1);
         assert_eq!(app.selected_tab, 0);
 
         app.load_certificate_bytes(pem);
-        assert_eq!(app.certs.len(), 1);
+        assert_eq!(app.documents.len(), 1);
         assert_eq!(app.selected_tab, 0);
+    }
+
+    #[test]
+    fn test_load_csr() {
+        let mut app = test_app();
+        let csr = include_bytes!("../assets/test.csr");
+        app.load_certificate_bytes(csr);
+        assert_eq!(app.documents.len(), 1);
+        assert!(app.error_msgs.is_empty());
+        assert!(app.documents[0].is_csr());
+    }
+
+    #[test]
+    fn test_load_csr_with_extensions() {
+        let mut app = test_app();
+        let csr = include_bytes!("../assets/test_with_exts.csr");
+        app.load_certificate_bytes(csr);
+        assert_eq!(app.documents.len(), 1);
+        assert!(app.documents[0].is_csr());
+        // Should have Attributes field
+        let labels: Vec<&str> = app.documents[0]
+            .fields()
+            .iter()
+            .map(|f| f.label.as_str())
+            .collect();
+        assert!(labels.contains(&"Attributes"));
     }
 
     #[test]
@@ -1341,10 +1488,15 @@ mod tests {
         let pem = include_bytes!("../assets/baidu.com.pem");
         app.load_certificate_bytes(pem);
 
-        let cert = &app.certs[0];
-        assert!(matches!(
-            cert.validity_status,
-            ValidityStatus::Valid | ValidityStatus::Expired | ValidityStatus::NotYetValid
-        ));
+        let doc = &app.documents[0];
+        match doc {
+            Document::Certificate(cert) => {
+                assert!(matches!(
+                    cert.validity_status,
+                    ValidityStatus::Valid | ValidityStatus::Expired | ValidityStatus::NotYetValid
+                ));
+            }
+            _ => panic!("Expected certificate document"),
+        }
     }
 }

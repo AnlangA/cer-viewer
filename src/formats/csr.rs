@@ -161,6 +161,13 @@ pub fn is_pem_csr(data: &[u8]) -> bool {
     )
 }
 
+/// Detect if DER data is a CSR (PKCS#10 CertificationRequest).
+///
+/// Attempts to parse the data as a CSR. Returns `true` if successful.
+pub fn is_der_csr(data: &[u8]) -> bool {
+    X509CertificationRequest::from_der(data).is_ok()
+}
+
 // ── Tree construction ──────────────────────────────────────────────
 
 fn build_csr_tree(csr: &X509CertificationRequest<'_>, der_data: Vec<u8>) -> ParsedCsr {

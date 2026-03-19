@@ -577,7 +577,6 @@ fn detect_der_label(data: &[u8]) -> &'static str {
     }
 
     // Try CSR (PKCS#10 CertificationRequest).
-    #[cfg(feature = "pkcs12")]
     if crate::formats::csr::is_der_csr(data) {
         return "CERTIFICATE REQUEST";
     }

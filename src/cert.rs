@@ -243,6 +243,7 @@ pub fn parse_pem_certificate(pem_data: &[u8]) -> Result<ParsedCert> {
 /// Parse all PEM certificate blocks from data, returning a list of parsed certificates.
 ///
 /// Supports PEM files containing multiple certificate blocks (certificate chains).
+#[allow(dead_code)]
 pub fn parse_pem_certificates(pem_data: &[u8]) -> Vec<Result<ParsedCert>> {
     let mut results = Vec::new();
     let mut remaining = pem_data;
@@ -276,6 +277,7 @@ pub fn parse_der_certificate(der_data: &[u8]) -> Result<ParsedCert> {
 }
 
 /// Detect format and parse. For PEM, extracts all certificate blocks.
+#[allow(dead_code)]
 pub fn parse_certificates(data: &[u8]) -> Vec<Result<ParsedCert>> {
     if data.starts_with(b"-----BEGIN") {
         parse_pem_certificates(data)
@@ -288,6 +290,7 @@ pub fn parse_certificates(data: &[u8]) -> Vec<Result<ParsedCert>> {
 }
 
 /// Detect format and parse a single certificate (for backward compatibility).
+#[allow(dead_code)]
 pub fn parse_certificate(data: &[u8]) -> Result<ParsedCert> {
     if data.starts_with(b"-----BEGIN") {
         parse_pem_certificate(data)

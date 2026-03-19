@@ -787,10 +787,10 @@ impl eframe::App for CertViewerApp {
                     draw_empty_state(ui);
                 } else {
                     let selected_doc = self.documents.get(self.selected_tab);
-                    let has_certs_only = self
+                    let has_any_cert = self
                         .documents
                         .iter()
-                        .all(|d| matches!(d, Document::Certificate(_)));
+                        .any(|d| matches!(d, Document::Certificate(_)));
 
                     // View mode switcher (only for certificates)
                     ui.horizontal(|ui| {
@@ -808,22 +808,25 @@ impl eframe::App for CertViewerApp {
                             self.view_mode = ViewMode::Details;
                         }
 
-                        let chain_btn =
-                            egui::Button::new(RichText::new("Chain View").size(theme::FONT_BODY))
-                                .corner_radius(CornerRadius::same(4))
-                                .fill(if self.view_mode == ViewMode::Chain {
-                                    theme::ACCENT
-                                } else {
-                                    egui::Color32::TRANSPARENT
-                                });
+                        // Show Chain View button when the selected document is a certificate
+                        // and there is at least one certificate loaded
+                        let chain_enabled = has_any_cert
+                            && selected_doc.map(|d| !d.is_csr()).unwrap_or(false);
 
-                        // Disable chain view when viewing a CSR or when only CSRs are loaded
-                        let chain_enabled =
-                            has_certs_only && selected_doc.map(|d| !d.is_csr()).unwrap_or(false);
+                        if chain_enabled {
+                            let chain_btn = egui::Button::new(
+                                RichText::new("Chain View").size(theme::FONT_BODY),
+                            )
+                            .corner_radius(CornerRadius::same(4))
+                            .fill(if self.view_mode == ViewMode::Chain {
+                                theme::ACCENT
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            });
 
-                        // Only show Chain View button when viewing a certificate
-                        if chain_enabled && ui.add(chain_btn).clicked() {
-                            self.view_mode = ViewMode::Chain;
+                            if ui.add(chain_btn).clicked() {
+                                self.view_mode = ViewMode::Chain;
+                            }
                         }
                     });
                     ui.add_space(8.0);

@@ -7,10 +7,7 @@
 // without an accompanying terminal.  When the binary is invoked with CLI
 // arguments we re-attach to the parent console (see `try_attach_parent_console`)
 // so that command-line output still reaches the calling terminal.
-#![cfg_attr(
-    all(windows, not(debug_assertions)),
-    windows_subsystem = "windows"
-)]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod cert;
 mod cli;
